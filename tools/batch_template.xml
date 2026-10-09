@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FormInfo_ xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <FileList>
+    <ETABSFile>MODEL.EDB</ETABSFile>
+    <OutputFile>OUTPUT.xml</OutputFile>
+  </FileList>
+  <FrameInfo>
+    <TopStoryDriftR>300</TopStoryDriftR>
+    <InterStoryDriftR>300</InterStoryDriftR>
+    <SteelDesignCode>AISC 360-22</SteelDesignCode>
+  </FrameInfo>
+  <OptInfo>
+    <MaxFuncEvaluation>30000</MaxFuncEvaluation>
+    <MemorySize>100</MemorySize>
+    <MemoryUpdateType>GreedyWorst</MemoryUpdateType>
+    <ClearDuplicates>true</ClearDuplicates>
+    <HarmonySearch>
+      <PAR>0.6</PAR>
+      <HMCR>0.9</HMCR>
+      <PARChangeType>Dynamic</PARChangeType>
+      <HMCRChangeType>Adaptive</HMCRChangeType>
+    </HarmonySearch>
+    <BioGeography>
+      <MutationRate>0</MutationRate>
+    </BioGeography>
+    <OptimizationMethod>HarmornySearch</OptimizationMethod>
+    <LevyFlight>true</LevyFlight>
+    <TestWithMath>false</TestWithMath>
+  </OptInfo>
+  <TimerInfo>
+    <startDate>0001-01-01T00:00:00</startDate>
+  </TimerInfo>
+  <HideETABS>false</HideETABS>
+  <CheckStructure>false</CheckStructure>
+  <CompositeColumns>false</CompositeColumns>
+  <AutoCombos>true</AutoCombos>
+  <DriftComboMode>LateralCasesOnly</DriftComboMode>
+  <Seed>1</Seed>
+  <CompositeCode>AISC360_22</CompositeCode>
+  <CompositeType>FilledTube</CompositeType>
+  <HybridColumns>false</HybridColumns>
+  <TransitionMode>PerStack</TransitionMode>
+  <GroupTypes />
+  <RepairMode>Combined</RepairMode>
+  <UseCache>true</UseCache>
+  <SkipUnusedCases>true</SkipUnusedCases>
+  <Costs>
+    <Steel>1</Steel>
+    <Rebar>0.5</Rebar>
+    <Concrete>0.6</Concrete>
+    <Formwork>0.15</Formwork>
+  </Costs>
+  <SkipCtoC>false</SkipCtoC>
+  <SkipBtoC>false</SkipBtoC>
+  <PDelta>true</PDelta>
+  <RestartEvery>100</RestartEvery>
+</FormInfo_>

@@ -1,0 +1,7 @@
+# Ornek liste: bir satir bir ornek. Sutunlarin tamami icin: ModelBuilder.exe /template dosya.csv
+Name,BaysX,BaysY,Stories,FirstStoryHeight,StoryHeight,StoryBand,FrameSystem,WindSpeed,SDS,SD1
+E05_P,3x8,3x8,5,4.5,3.6,1,Perimeter,49,1.0,0.6
+E10_P,3x8,3x8,10,4.5,3.6,2,Perimeter,49,1.0,0.6
+E15_P,3x9,9 6 9,15,4.5,3.6,3,Perimeter,49,1.0,0.6
+E20_P,4x8,4x8,20,4.5,3.6,4,Perimeter,49,1.0,0.6
+E10_S,3x8,3x8,10,4.5,3.6,2,Space,49,1.0,0.6

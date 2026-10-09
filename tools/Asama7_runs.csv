@@ -1,0 +1,10 @@
+Name,Model,Method,Mode,MaxAnalyses,MemorySize,Seed,Transition,AbcLimit
+SSO_Steel,../Modeller/525M/525Member.EDB,SocialSpider,Steel,500,20,1,PerStack,
+SSO_Composite,../Modeller/525M/525Member.EDB,SocialSpider,Composite,500,20,1,PerStack,
+SSO_Hybrid,../Modeller/525M/525Member.EDB,SocialSpider,Hybrid,500,20,1,PerStack,
+HS_Steel,../Modeller/525M/525Member.EDB,HarmornySearch,Steel,500,20,1,PerStack,
+HS_Composite,../Modeller/525M/525Member.EDB,HarmornySearch,Composite,500,20,1,PerStack,
+HS_Hybrid,../Modeller/525M/525Member.EDB,HarmornySearch,Hybrid,500,20,1,PerStack,
+ABC_Steel,../Modeller/525M/525Member.EDB,ArtificialBeeColony,Steel,500,20,1,PerStack,10
+ABC_Composite,../Modeller/525M/525Member.EDB,ArtificialBeeColony,Composite,500,20,1,PerStack,10
+ABC_Hybrid,../Modeller/525M/525Member.EDB,ArtificialBeeColony,Hybrid,500,20,1,PerStack,10

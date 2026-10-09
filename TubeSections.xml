@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Concrete-filled steel tube columns (AISC 360-16 / 360-22 I2.2, see KULLANIM_KILAVUZU.md).
+  Catalog of the composite column groups (form: Composite columns + "Filled tube"):
+    library sections: STEEL_BOX (square; rectangular optional) and STEEL_PIPE (optional) of the CSI library
+                      (Library empty = SectionPropertyDataPath of FrameSap2000.exe.config), design wall thickness
+    built-up boxes  : square boxes welded from plates, BuiltUpMin..BuiltUpMax step BuiltUpStep, BuiltUpThicknesses
+  Sections smaller than MinDimension or beyond lambda_max of AISC Table I1.1a / I1.1b are not used.
+  Lengths in mm. The steel is the column steel of the model, the fill concrete the concrete of the model.
+-->
+<TubeSettings>
+  <Library></Library>
+  <SquareBoxes>true</SquareBoxes>
+  <RectangularBoxes>false</RectangularBoxes>
+  <!-- pipes: beam moment connections to round tubes are harder to detail (rings / diaphragms) -->
+  <Pipes>false</Pipes>
+  <!-- smallest outer dimension: TBDY 2018 7.3.1.1 minimum of RC columns (300 mm), concrete placing, beam connections -->
+  <MinDimension>300</MinDimension>
+  <BuiltUpBoxes>true</BuiltUpBoxes>
+  <BuiltUpMin>400</BuiltUpMin>
+  <BuiltUpMax>1000</BuiltUpMax>
+  <BuiltUpStep>50</BuiltUpStep>
+  <BuiltUpThicknesses>12,15,20,25,30,35,40,50</BuiltUpThicknesses>
+  <!-- seismic wall slenderness, TBDY 2018 Table 9.3 composite members (= AISC 341-10 Table D1.1):
+       High: box b/t <= 1.4 sqrt(E/Fy), pipe D/t <= 0.076 E/Fy; Moderate: 2.26 sqrt(E/Fy), 0.15 E/Fy; None: AISC 360 limits only -->
+  <SeismicDuctility>High</SeismicDuctility>
+  <!-- empty: the concrete material of the model (the first one if there are several) -->
+  <ConcreteMaterial></ConcreteMaterial>
+  <!-- effective length factors (buckling about local 2 / local 3) and sway amplifier B2 (1.0 = P-Delta analysis) -->
+  <K22>1.0</K22>
+  <K33>1.0</K33>
+  <B2>1.0</B2>
+  <BoxPrefix>CFT_</BoxPrefix>
+  <PipePrefix>CFP_</PipePrefix>
+  <!-- relative unit costs (steel = 1): structural steel 2.0 $/kg = 204 $/kN, placed concrete 120 $/m3; edit in the form -->
+  <SteelUnitCost>1.0</SteelUnitCost>
+  <ConcreteUnitCost>0.6</ConcreteUnitCost>
+</TubeSettings>

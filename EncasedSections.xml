@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Encased composite column settings (AISC 360-16 / 360-22, see KULLANIM_KILAVUZU.md).
+  Every W section of the library produces one encased section:
+    H = W depth  + 2 * ConcreteCover  (rounded up to DimensionRounding, >= MinDimension)
+    B = W flange + 2 * ConcreteCover  (rounded up to DimensionRounding, >= MinDimension)
+    bars: perimeter layout, bars per face increased from MinBarsPerFace until rho_sr >= 0.004
+  Lengths in mm. Materials must exist in the ETABS model.
+-->
+<EncasedSettings>
+  <ConcreteMaterial>4000Psi</ConcreteMaterial>
+  <RebarMaterial>A615Gr60</RebarMaterial>
+  <ConcreteCover>75</ConcreteCover>
+  <RebarCover>50</RebarCover>
+  <RebarDiameter>20</RebarDiameter>
+  <!-- ties of the ETABS encased section (ETABS 20+); bar centre = RebarCover from the concrete face -->
+  <TieDiameter>10</TieDiameter>
+  <TieSpacing>150</TieSpacing>
+  <!-- Mn of the encased sections: StrainCompatibility (AISC I1.2b, agrees with ETABS) or PlasticStress (I1.2a) -->
+  <FlexureMethod>StrainCompatibility</FlexureMethod>
+  <MinBarsPerFace>2</MinBarsPerFace>
+  <MaxBarsPerFace>6</MaxBarsPerFace>
+  <DimensionRounding>50</DimensionRounding>
+  <MinDimension>300</MinDimension>
+  <!-- effective length factors (buckling about local 2 / local 3) and sway amplifier B2 (1.0 = P-Delta analysis) -->
+  <K22>1.0</K22>
+  <K33>1.0</K33>
+  <B2>1.0</B2>
+  <SectionPrefix>EC_</SectionPrefix>
+  <!-- relative unit costs of the objective function in composite mode -->
+  <!-- default relative unit costs (steel = 1) from assumed unit prices: structural steel 2.0 $/kg = 204 $/kN,
+       rebar 1.0 $/kg = 102 $/kN, placed concrete C30 120 $/m3, column formwork 30 $/m2. Edit in the form. -->
+  <SteelUnitCost>1.0</SteelUnitCost>       <!-- per kN structural steel -->
+  <RebarUnitCost>0.5</RebarUnitCost>       <!-- per kN reinforcement -->
+  <ConcreteUnitCost>0.6</ConcreteUnitCost> <!-- per m3 concrete -->
+  <FormworkUnitCost>0.15</FormworkUnitCost> <!-- per m2 formwork -->
+</EncasedSettings>

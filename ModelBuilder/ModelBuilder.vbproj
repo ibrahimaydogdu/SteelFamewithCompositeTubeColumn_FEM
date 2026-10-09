@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{7A3F5B1E-2C84-4D6B-9E10-5F8A21C7D3B4}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <StartupObject>ModelBuilder.Program</StartupObject>
+    <RootNamespace>ModelBuilder</RootNamespace>
+    <AssemblyName>ModelBuilder</AssemblyName>
+    <FileAlignment>512</FileAlignment>
+    <MyType>Empty</MyType>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <DefineDebug>true</DefineDebug>
+    <DefineTrace>true</DefineTrace>
+    <OutputPath>bin\Debug\</OutputPath>
+    <NoWarn>42016,41999,42017,42018,42019,42032,42036,42020,42021,42022</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <DefineDebug>false</DefineDebug>
+    <DefineTrace>true</DefineTrace>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <NoWarn>42016,41999,42017,42018,42019,42032,42036,42020,42021,42022</NoWarn>
+  </PropertyGroup>
+  <!-- ETABS API: ETABS 22 if installed (override with /p:ETABSDir=...) -->
+  <PropertyGroup>
+    <ETABSDir Condition=" '$(ETABSDir)' == '' ">C:\Program Files\Computers and Structures\ETABS 22\</ETABSDir>
+  </PropertyGroup>
+  <PropertyGroup>
+    <OptionExplicit>On</OptionExplicit>
+    <OptionCompare>Binary</OptionCompare>
+    <OptionStrict>Off</OptionStrict>
+    <OptionInfer>On</OptionInfer>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="ETABSv1, Version=1.0.0.0, Culture=neutral, PublicKeyToken=453d728ef24c6f5e, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>$(ETABSDir)ETABSv1.dll</HintPath>
+    </Reference>
+    <!-- ETABS 20+ API (.NET Standard 2.0) references Microsoft.Win32.Registry 5.0 -->
+    <Reference Include="Microsoft.Win32.Registry" Condition="Exists('$(ETABSDir)Microsoft.Win32.Registry.dll')">
+      <HintPath>$(ETABSDir)Microsoft.Win32.Registry.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="netstandard" />
+    <Reference Include="System" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+  </ItemGroup>
+  <ItemGroup>
+    <Import Include="Microsoft.VisualBasic" />
+    <Import Include="System" />
+    <Import Include="System.Collections" />
+    <Import Include="System.Collections.Generic" />
+    <Import Include="System.Diagnostics" />
+    <Import Include="System.Linq" />
+    <Import Include="System.Xml.Linq" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="BuildParams.vb" />
+    <Compile Include="BuildPlan.vb" />
+    <Compile Include="SectionPools.vb" />
+    <Compile Include="EtabsBuilder.vb" />
+    <Compile Include="Loads.vb" />
+    <Compile Include="Combos.vb" />
+    <Compile Include="Audit.vb" />
+    <Compile Include="BuildRunner.vb" />
+    <Compile Include="BuilderForm.vb" />
+    <Compile Include="Program.vb" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
+</Project>
