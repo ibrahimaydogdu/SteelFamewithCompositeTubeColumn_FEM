@@ -117,6 +117,7 @@ Public Module Program
             Console.WriteLine("ETABS analysis: " & Sap.Analyze.RunAnalysis())
             Dim sw = Stopwatch.StartNew()
             Dim fem As New FemStatic(M)
+            If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" Then fem.UseMassPDelta()
             Dim R = fem.ModalSolve(Math.Min(M.ModalCount, 12))
             Dim nm As Integer = R.Period.Length
             Console.WriteLine("FEM modal solution " & sw.Elapsed.TotalMilliseconds.ToString("0") & " ms, iterations " & R.Iterations & ", free DOF " & fem.NFree)
@@ -172,6 +173,7 @@ Public Module Program
             Next
             Console.WriteLine("RS cases: " & String.Join(", ", M.RSCases.Select(Function(c) c.Name & " dir " & c.Direction & " sf " & c.ScaleFactor.ToString("0.0000") & " ecc " & c.Eccentricity & " damp " & c.Damping & " " & c.Spectrum)))
             Dim fem As New FemStatic(M)
+            If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" Then fem.UseMassPDelta()
             Dim sw = Stopwatch.StartNew()
             Dim Md = fem.ModalSolve(M.ModalCount)
             Console.WriteLine("modal " & sw.ElapsedMilliseconds & " ms, modes " & Md.Period.Length)
@@ -319,8 +321,9 @@ Public Module Program
         Dim PVer, PNR As Integer, PFs() As String = Nothing, PDt() As String = Nothing
         If Sap.DatabaseTables.GetTableForEditingArray("P-Delta Option Definition", "", PVer, PFs, PNR, PDt) = 0 AndAlso PNR > 0 Then
             Dim iM As Integer = Array.IndexOf(PFs, "AutoMethod")
-            If iM >= 0 AndAlso PDt(iM) <> "None" Then
-                PDt(iM) = "None"
+            Dim tgt As String = If(Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass", "Non-iterative Based on Mass", "None")
+            If iM >= 0 AndAlso PDt(iM) <> tgt Then
+                PDt(iM) = tgt
                 Sap.DatabaseTables.SetTableForEditingArray("P-Delta Option Definition", PVer, PFs, PNR, PDt)
                 Dim a, b, c, d As Integer, Lg As String = Nothing
                 Sap.DatabaseTables.ApplyEditedTables(True, a, b, c, d, Lg)
@@ -403,11 +406,20 @@ Public Module Program
             If Sap.DatabaseTables.GetTableForEditingArray("P-Delta Option Definition", "", PVer, PFs, PNR, PDt) = 0 AndAlso PNR > 0 Then
                 Dim iM As Integer = Array.IndexOf(PFs, "AutoMethod")
                 Console.WriteLine("preset P-Delta: " & If(iM >= 0, PDt(iM), "?"))
-                If iM >= 0 AndAlso PDt(iM) <> "None" Then
-                    PDt(iM) = "None"
+                Dim target As String = If(Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass", "Non-iterative Based on Mass", "None")
+                If iM >= 0 AndAlso PDt(iM) <> target Then
+                    PDt(iM) = target
                     Sap.DatabaseTables.SetTableForEditingArray("P-Delta Option Definition", PVer, PFs, PNR, PDt)
                     Dim pNF, pNE, pNW, pNI As Integer, Lg As String = Nothing
-                    Console.WriteLine("preset P-Delta -> None: " & Sap.DatabaseTables.ApplyEditedTables(True, pNF, pNE, pNW, pNI, Lg) & " errors " & (pNF + pNE))
+                    Console.WriteLine("preset P-Delta -> " & target & ": " & Sap.DatabaseTables.ApplyEditedTables(True, pNF, pNE, pNW, pNI, Lg) & " errors " & (pNF + pNE))
+                End If
+                If Environment.GetEnvironmentVariable("FEM_PDELTA") = "nl" Then
+                    Dim nC As Integer, cNames() As String = Nothing
+                    Sap.LoadCases.GetNameList(nC, cNames)
+                    For Each cn0 In cNames
+                        Dim ct0 As eLoadCaseType, st00 As Integer
+                        If Sap.LoadCases.GetTypeOAPI(cn0, ct0, st00) = 0 AndAlso ct0 = eLoadCaseType.NonlinearStatic Then Console.WriteLine("  P-Delta on case " & cn0 & ": " & Sap.LoadCases.StaticNonlinear.SetGeometricNonlinearity(cn0, 1))
+                    Next
                 End If
             End If
             'experiment switches for isolating ETABS behaviour: FEM_OFFSET = "none" (zero end offsets) or a rigid zone factor
@@ -469,7 +481,7 @@ Public Module Program
                 If dev > 1.0E-6 OrElse dev1 > 1.0E-6 Then bad += 1 : If bad <= 3 Then Console.WriteLine("  axes problem element " & el.Name & " orthonormality " & dev.ToString("0.0E+00") & " axis1 vs member " & dev1.ToString("0.0E+00"))
             Next
             Console.WriteLine("  elements with axes problems: " & bad)
-            Dim Wanted As List(Of String) = If(CaseList = "", M.Combos.Where(Function(c) c.Name.StartsWith("FEM_")).Select(Function(c) c.Name).ToList(), CaseList.Split(","c).ToList())
+            Dim Wanted As List(Of String) = If(CaseList = "", M.Combos.Where(Function(c) c.Name.StartsWith("FEM_") OrElse (Environment.GetEnvironmentVariable("FEM_PDELTA") = "nl" AndAlso M.NonlinearCases.Contains(c.Name))).Select(Function(c) c.Name).ToList(), CaseList.Split(","c).ToList())
             Wanted = Wanted.Where(Function(c) M.Combos.Any(Function(x) x.Name = c)).ToList()
             Console.WriteLine("cases compared: " & String.Join(", ", Wanted))
 
@@ -489,7 +501,11 @@ Public Module Program
             End If
             Console.WriteLine("ETABS analysis: " & Sap.Analyze.RunAnalysis())
             sw.Restart()
-            Dim Res = New FemStatic(M).Solve()
+            If Environment.GetEnvironmentVariable("FEM_NOTORS") = "1" Then GeometricTorsion = False
+            If Environment.GetEnvironmentVariable("FEM_LUMPEDG") = "1" Then GeometricLumped = True
+            Dim femS As New FemStatic(M)
+            If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" AndAlso Environment.GetEnvironmentVariable("FEM_NOPD") <> "1" Then femS.UseMassPDelta() : Console.WriteLine("mass-based P-Delta axial forces applied in the FEM")
+            Dim Res = femS.Solve()
             Console.WriteLine("FEM solution " & sw.Elapsed.TotalMilliseconds.ToString("0") & " ms (including assembly), free DOF " & New FemStatic(M).NFree & If(Res.Failed, " FAILED: " & Res.Message, ""))
             If Res.Failed Then Return
 
@@ -555,11 +571,19 @@ Public Module Program
                 Dim U(nd - 1) As Double, Rx(nd - 1) As Double
                 Dim EF(M.Elements.Count - 1)() As Double
                 For e = 0 To M.Elements.Count - 1 : EF(e) = New Double(11) {} : Next
-                For Each t In Combo.Terms
-                    Dim p0 As Integer = Idx(t.Name)
-                    For i = 0 To nd - 1 : U(i) += t.Factor * Res.U(p0)(i) : Rx(i) += t.Factor * Res.Reaction(p0)(i) : Next
-                    For e = 0 To M.Elements.Count - 1 : For i = 0 To 11 : EF(e)(i) += t.Factor * Res.FaceForce(p0)(e)(i) : Next : Next
-                Next
+                If Environment.GetEnvironmentVariable("FEM_PDELTA") = "nl" AndAlso M.NonlinearCases.Contains(c) Then
+                    Dim swn = Stopwatch.StartNew()
+                    Dim Rn = femS.SolveIterative(Combo.Terms)
+                    Console.WriteLine("  iterative P-Delta solution of " & c & ": " & swn.ElapsedMilliseconds & " ms" & If(Rn.Failed, " FAILED " & Rn.Message, ""))
+                    For i = 0 To nd - 1 : U(i) = Rn.U(0)(i) : Rx(i) = Rn.Reaction(0)(i) : Next
+                    For e = 0 To M.Elements.Count - 1 : For i = 0 To 11 : EF(e)(i) = Rn.FaceForce(0)(e)(i) : Next : Next
+                Else
+                    For Each t In Combo.Terms
+                        Dim p0 As Integer = Idx(t.Name)
+                        For i = 0 To nd - 1 : U(i) += t.Factor * Res.U(p0)(i) : Rx(i) += t.Factor * Res.Reaction(p0)(i) : Next
+                        For e = 0 To M.Elements.Count - 1 : For i = 0 To 11 : EF(e)(i) += t.Factor * Res.FaceForce(p0)(e)(i) : Next : Next
+                    Next
+                End If
                 If Not Dsp.ContainsKey(c) Then Console.WriteLine(c.PadRight(34) & "no ETABS result") : Continue For
                 Dim scT As Double = 0, scR As Double = 0
                 For i = 0 To nd - 1

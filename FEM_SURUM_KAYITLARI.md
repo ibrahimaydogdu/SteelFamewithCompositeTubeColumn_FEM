@@ -61,4 +61,26 @@ Süre: P4 0,5 s; 525M 8,7 s (yoğun matrislerle; birleştirme aşamasında hızl
 
 **Notlar:** ETABS otomatik desenleri (`~LLRF`, `~RSXECC`) analizden sonra oluşuyor; tasarım çalıştırıp kilit açılınca siliniyor. Diyaframa bağlı olup eleman bağlamayan düğümler (ETABS'in diyafram merkezi noktaları) artık yalnızca yük taşımak için diyafram eşlemesine alınıyor.
 
-**Sonraki:** F3 ikinci mertebe (P-Δ / Direct Analysis); F4 AISC 360-22 çelik tasarım; AISC 341; optimizasyon entegrasyonu ve ETABS ile final doğrulama.
+
+## Aşama F3: ikinci mertebe (P-Δ) (2026-10-09)
+
+**Kod:** `FemElementMath.GeometricStiffness` (birim çekme kuvveti için tutarlı geometrik rijitlik: iki eğilme düzleminde kübik alan, burulma terimi P·Ip/A); zincire `Axial` parametresi (her parçanın rijitliğine P·Kg eklenir); `FemCore/FemPDelta.vb`: `UseMassPDelta` ve `SolveIterative`; `FemModel.CombinePatterns`.
+
+**ETABS'in P-Δ davranışı (ölçüldü):**
+1. **Ön ayar "Non-iterative Based on Mass"** (iyileştiricinin `EnablePDelta` ayarı): yanal kütle × g'nin düğümlere düşey yük olarak uygulanmasıyla bulunan eleman eksenel kuvvetleri, **bütün doğrusal durumların** (statik, modal, tepki spektrumu) geometrik rijitliğini belirler. Modal periyotlar da uzar (P4: 0,71697 → 0,72145 s).
+2. **Doğrusal olmayan statik durum, P-Δ açık** (525M'nin üç durumu): durumun kendi yük birleşiminin dengesinde yinelemeli eksenel kuvvetler. FEM'de eksenel kuvvetler yerdeğiştirme değişimi < 1e-6 olana dek yinelenir.
+
+**Sonuçlar (ETABS ile karşılaştırma; DAM 0,8 etkin):**
+| Durum | Hata |
+|---|---|
+| P4, kütle tabanlı P-Δ, statik WX / WY | yerdeğiştirme 0,15 / 0,28 %; dönme 0,43 / 0,74 %; uç kuvvetleri ≤ %0,5 (V2, M3). P-Δ olmadan fark: %0,84 / %1,26 |
+| P4, modal (mod 1–4) | periyot hatası 0,05–0,36 % |
+| P4, RSX / RSY (dışmerkezlikli, P-Δ'lı) | yerdeğiştirme 0,23 / 0,26 %; V2, M2, M3 ≤ %0,7–1,2 |
+| 525M, P-Δ'lı doğrusal olmayan durumlar: rüzgâr X / Y | yerdeğiştirme 0,12 / 0,37 %; uç kuvvetleri ≤ %0,1–0,4 |
+| 525M, yalnız yerçekimi durumu (1,2D+1,6L+0,5Lr) | düşey yerdeğiştirme %0,19, ancak yatay sehim farkı nedeniyle en büyük yerdeğiştirme hatası %1,8; uç kuvvetleri ≤ %0,5 |
+
+- Geometrik rijitlik biçimleri denendi: tutarlı (kübik) matris; yalnızca P/L (topaklı). Tutarlı olan genel olarak daha tutarlı (P4 statik 0,15/0,28 % ↔ topaklı 0,09/0,17 %, ama 525M'de dönmeler topaklıda %1,2–1,4'e çıkıyor), bu yüzden tutarlı olan varsayılan. Burulma terimi P4 sonuçlarını değiştirmedi.
+- P ölçeği taraması (0,8–1,3) belirgin bir düzeltme göstermedi: kalan %0,1–0,3 fark eksenel kuvvet büyüklüğünden değil, ETABS'in kapalı ayrıntılarından geliyor.
+- **Süre (henüz hızlandırılmadı):** 525M'de bir P-Δ'lı durumun yinelemesi 15–22 s (her yinelemede matris yeniden kuruluyor, yoğun Cholesky). Entegrasyon aşamasında eleman matrislerinin önbelleğe alınması ve bantlı çözücü ile saniyenin altına indirilecek.
+
+**Sonraki:** F4 AISC 360-22 çelik tasarım (D/C oranı doğrulaması); AISC 341; optimizasyon entegrasyonu ve ETABS ile final doğrulama.

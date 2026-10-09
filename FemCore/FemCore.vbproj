@@ -59,6 +59,7 @@
     <Compile Include="FemChain.vb" />
     <Compile Include="FemStatic.vb" />
     <Compile Include="FemModal.vb" />
+    <Compile Include="FemPDelta.vb" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
 </Project>

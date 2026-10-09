@@ -58,7 +58,7 @@ Partial Public Class FemStatic
             Dim E = M.Elements(ei)
             Dim Tm = TransformationMatrix(E)
             Dim dofs = ElementDofs(E)
-            Dim ch = Build(E, NoLoads, 0, M.AxialFactor, M.FlexuralFactor)
+            Dim ch = Build(E, NoLoads, 0, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
             ChainK(ei) = ch
             Dim tmp(11, 11) As Double, kg(11, 11) As Double
             For i = 0 To 11 : For j = 0 To 11

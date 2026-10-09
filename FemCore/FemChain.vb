@@ -51,7 +51,7 @@ Public Module FemChain
     End Function
 
     'a: offset at I, b: offset at J (lengths), rz: rigid zone factor
-    Public Function Build(ByVal E As FemElement, ByVal Loads As List(Of LocalLoad)(), ByVal NPat As Integer, ByVal AxialFactor As Double, ByVal FlexuralFactor As Double) As ChainResult
+    Public Function Build(ByVal E As FemElement, ByVal Loads As List(Of LocalLoad)(), ByVal NPat As Integer, ByVal AxialFactor As Double, ByVal FlexuralFactor As Double, Optional ByVal Axial As Double = 0) As ChainResult
         Dim R As New ChainResult
         Dim L As Double = E.Length
         Dim a As Double = Math.Max(0, E.OffsetI), b As Double = Math.Max(0, E.OffsetJ)
@@ -85,6 +85,10 @@ Public Module FemChain
         Dim AddSegment = Sub(x0 As Double, x1 As Double, dofA() As Integer, dofB() As Integer, rel As List(Of Integer), isClear As Boolean)
                              Dim Ls As Double = x1 - x0
                              Dim ks = LocalStiffness(Sec, Ls)
+                             If Axial <> 0 Then
+                                 Dim kgm = GeometricStiffness(Sec, Ls)
+                                 For i = 0 To 11 : For j = 0 To 11 : ks(i, j) += Axial * kgm(i, j) : Next : Next
+                             End If
                              Dim map(11) As Integer
                              For i = 0 To 5 : map(i) = dofA(i) : map(6 + i) = dofB(i) : Next
                              Dim fs(NPat - 1)() As Double

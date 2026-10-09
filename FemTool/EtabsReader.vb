@@ -279,13 +279,17 @@ Public Class EtabsReader
         For Each nm In Names
             Dim ct As eLoadCaseType, st As Integer
             If Sap.LoadCases.GetTypeOAPI(nm, ct, st) <> 0 Then Continue For
-            If ct <> eLoadCaseType.LinearStatic Then
+            Dim nl As Integer, lt() As String = Nothing, ln() As String = Nothing, sf() As Double = Nothing
+            If ct = eLoadCaseType.NonlinearStatic Then
+                If Sap.LoadCases.StaticNonlinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
+                M.NonlinearCases.Add(nm)
+            ElseIf ct = eLoadCaseType.LinearStatic Then
+                If Sap.LoadCases.StaticLinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
+            Else
                 If nm.StartsWith("~") Then Continue For
-                Note("case " & nm & " is " & ct.ToString() & " (not static linear)")
+                Note("case " & nm & " is " & ct.ToString() & " (not static)")
                 Continue For
             End If
-            Dim nl As Integer, lt() As String = Nothing, ln() As String = Nothing, sf() As Double = Nothing
-            If Sap.LoadCases.StaticLinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
             Dim Terms As New List(Of FemTerm)
             For k = 0 To nl - 1
                 If lt(k) <> "Load" Then Note("static case " & nm & " has load type " & lt(k)) : Continue For

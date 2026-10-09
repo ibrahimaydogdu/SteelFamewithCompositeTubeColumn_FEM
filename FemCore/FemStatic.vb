@@ -6,6 +6,7 @@ Public Class StaticResults
     Public Reaction As Double()()       'reactions at the restrained DOF (global axes; zero elsewhere)
     Public EndForce As Double()()()     '[pattern][element](12): forces of the joints on the element ends, local axes
     Public FaceForce As Double()()()    '[pattern][element](12): forces on the ends of the clear span (faces), local axes
+    Public Axial As Double()()          '[pattern][element]: mean axial force of the clear span (tension positive)
     Public Failed As Boolean
     Public Message As String
 End Class
@@ -18,6 +19,7 @@ Partial Public Class FemStatic
     Private MapCoef()() As Double
     Public NFree As Integer
     Private Owner As List(Of String)
+    Public AxialForces() As Double                  'axial force per element for the geometric stiffness (Nothing: linear)
 
     Public Sub New(ByVal Model As FemModel)
         M = Model
@@ -126,7 +128,7 @@ Partial Public Class FemStatic
     Public Function Solve() As StaticResults
         Dim R As New StaticResults
         Dim np As Integer = M.Patterns.Count, ne As Integer = M.Elements.Count
-        R.U = New Double(np - 1)() {} : R.Reaction = New Double(np - 1)() {} : R.EndForce = New Double(np - 1)()() {} : R.FaceForce = New Double(np - 1)()() {}
+        R.U = New Double(np - 1)() {} : R.Reaction = New Double(np - 1)() {} : R.EndForce = New Double(np - 1)()() {} : R.FaceForce = New Double(np - 1)()() {} : R.Axial = New Double(np - 1)() {}
         Dim K(NFree - 1, NFree - 1) As Double
         Dim Fred(np - 1)() As Double
         For p = 0 To np - 1 : Fred(p) = New Double(NFree - 1) {} : Next
@@ -136,7 +138,7 @@ Partial Public Class FemStatic
             Dim E = M.Elements(ei)
             Dim Tm = TransformationMatrix(E)
             Dim dofs = ElementDofs(E)
-            Dim ch = Build(E, ElementLoads(ei, E), np, M.AxialFactor, M.FlexuralFactor)
+            Dim ch = Build(E, ElementLoads(ei, E), np, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
             Chains(ei) = ch : TT(ei) = Tm
             Dim tmp(11, 11) As Double, kg(11, 11) As Double
             For i = 0 To 11 : For j = 0 To 11
@@ -198,7 +200,7 @@ Partial Public Class FemStatic
             Next
             R.U(p) = U
             Dim Rx(U.Length - 1) As Double
-            R.EndForce(p) = New Double(ne - 1)() {} : R.FaceForce(p) = New Double(ne - 1)() {}
+            R.EndForce(p) = New Double(ne - 1)() {} : R.FaceForce(p) = New Double(ne - 1)() {} : R.Axial(p) = New Double(ne - 1) {}
             For ei = 0 To ne - 1
                 Dim E = M.Elements(ei)
                 Dim dofs = ElementDofs(E)
@@ -216,6 +218,7 @@ Partial Public Class FemStatic
                 Next
                 R.EndForce(p)(ei) = f
                 R.FaceForce(p)(ei) = FaceForces(Chains(ei), ul, p)
+                R.Axial(p)(ei) = 0.5 * (R.FaceForce(p)(ei)(6) - R.FaceForce(p)(ei)(0))
                 For i = 0 To 11
                     Dim s As Double = 0
                     For j = 0 To 11 : s += TT(ei)(j, i) * f(j) : Next

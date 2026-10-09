@@ -4,6 +4,9 @@ Imports MathNet.Numerics.LinearAlgebra
 'node I: u1 u2 u3 r1 r2 r3 (0..5), node J (6..11). Plane 1-2 bends about local axis 3 (I33, As2), plane 1-3 about axis 2 (I22, As3).
 Public Module FemElementMath
 
+    Public GeometricTorsion As Boolean = True
+    Public GeometricLumped As Boolean = False       'P/L on the transverse translations only (P-Delta without P-delta)
+
     Public Function LocalStiffness(ByVal S As FemSection, ByVal L As Double) As Double(,)
         Dim k(11, 11) As Double
         Dim EA As Double = S.E * S.A / L, GJ As Double = S.G * S.J / L
@@ -29,6 +32,36 @@ Public Module FemElementMath
                               {-12 * c, 6 * L * c, 12 * c, 6 * L * c},
                               {-6 * L * c, (2 - Phi) * L * L * c, 6 * L * c, (4 + Phi) * L * L * c}}
         For a = 0 To 3 : For b = 0 To 3 : k(d(a), d(b)) += n(a, b) : Next : Next
+        Return k
+    End Function
+
+    'Geometric stiffness of the member for a unit tension force (P-Delta): consistent matrix of the cubic displacement field in both bending
+    'planes and the torsional term P Ip / A
+    Public Function GeometricStiffness(ByVal S As FemSection, ByVal L As Double) As Double(,)
+        Dim k(11, 11) As Double
+        If GeometricLumped Then
+            For Each pr In {1, 2}
+                k(pr, pr) = 1.0 / L : k(pr + 6, pr + 6) = 1.0 / L : k(pr, pr + 6) = -1.0 / L : k(pr + 6, pr) = -1.0 / L
+            Next
+            Return k
+        End If
+        Dim c As Double = 1.0 / (30.0 * L)
+        Dim d() As Integer = {1, 5, 7, 11}
+        Dim m(,) As Double = {{36 * c, 3 * L * c, -36 * c, 3 * L * c},
+                              {3 * L * c, 4 * L * L * c, -3 * L * c, -L * L * c},
+                              {-36 * c, -3 * L * c, 36 * c, -3 * L * c},
+                              {3 * L * c, -L * L * c, -3 * L * c, 4 * L * L * c}}
+        For a = 0 To 3 : For b = 0 To 3 : k(d(a), d(b)) += m(a, b) : Next : Next
+        d = {2, 4, 8, 10}
+        Dim n(,) As Double = {{36 * c, -3 * L * c, -36 * c, -3 * L * c},
+                              {-3 * L * c, 4 * L * L * c, 3 * L * c, -L * L * c},
+                              {-36 * c, 3 * L * c, 36 * c, 3 * L * c},
+                              {-3 * L * c, -L * L * c, 3 * L * c, 4 * L * L * c}}
+        For a = 0 To 3 : For b = 0 To 3 : k(d(a), d(b)) += n(a, b) : Next : Next
+        If S.A > 0 AndAlso GeometricTorsion Then
+            Dim t As Double = (S.I22 + S.I33) / S.A / L
+            k(3, 3) += t : k(3, 9) -= t : k(9, 3) -= t : k(9, 9) += t
+        End If
         Return k
     End Function
 

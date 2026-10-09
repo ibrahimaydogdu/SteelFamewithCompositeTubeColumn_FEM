@@ -96,10 +96,34 @@ Public Class FemModel
     Public Spectra As New List(Of FemSpectrum)
     Public RSCases As New List(Of FemRSCase)
     Public ModalName As String
+    Public NonlinearCases As New List(Of String)     'static cases that ETABS solves as nonlinear (P-Delta when set)
     Public ModalCount As Integer
     Public AxialFactor As Double = 1.0           'stiffness reduction of the Direct Analysis Method applied by ETABS after a design run: EA
     Public FlexuralFactor As Double = 1.0        'and EI (0.8, tau-b = 1)
     Public Notes As New List(Of String)         'unsupported features, assumptions
+
+    'Load patterns combined with factors into one pattern (loads scaled)
+    Public Function CombinePatterns(ByVal Terms As List(Of FemTerm), ByVal Name As String) As FemPattern
+        Dim R As New FemPattern With {.Name = Name}
+        For Each t In Terms
+            Dim p As Integer = PatternIndex(t.Name)
+            If p < 0 Then Continue For
+            Dim Src = Patterns(p)
+            R.SelfWeightMultiplier += t.Factor * Src.SelfWeightMultiplier
+            For Each nl In Src.NodalLoads
+                Dim c As New FemNodalLoad With {.Node = nl.Node}
+                For d = 0 To 5 : c.F(d) = t.Factor * nl.F(d) : Next
+                R.NodalLoads.Add(c)
+            Next
+            For Each dl In Src.DistLoads
+                R.DistLoads.Add(New FemDistLoad With {.Element = dl.Element, .Dir = dl.Dir, .IsGlobal = dl.IsGlobal, .Relative = dl.Relative, .D1 = dl.D1, .D2 = dl.D2, .V1 = t.Factor * dl.V1, .V2 = t.Factor * dl.V2})
+            Next
+            For Each pl In Src.PointLoads
+                R.PointLoads.Add(New FemPointLoadOnElement With {.Element = pl.Element, .Dir = pl.Dir, .IsGlobal = pl.IsGlobal, .Relative = pl.Relative, .Dist = pl.Dist, .Value = t.Factor * pl.Value, .IsMoment = pl.IsMoment})
+            Next
+        Next
+        Return R
+    End Function
 
     Public Function NodeIndex(ByVal Name As String) As Integer
         For i = 0 To Nodes.Count - 1
