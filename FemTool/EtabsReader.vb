@@ -27,8 +27,64 @@ Public Class EtabsReader
         ReadFrames()
         ReadPatterns()
         ReadCases()
+        ReadMassAndSpectra()
         Return M
     End Function
+
+    'Mass source (self mass, load patterns), response spectrum functions and cases, modal case
+    Private Sub ReadMassAndSpectra()
+        Dim V, N As Integer, Fs() As String = Nothing, D() As String = Nothing
+        If Sap.DatabaseTables.GetTableForEditingArray("Mass Source Definition", "", V, Fs, N, D) = 0 AndAlso N > 0 Then
+            Dim Col = Function(row As Integer, f As String) As String
+                          Dim j As Integer = Array.IndexOf(Fs, f)
+                          Return If(j >= 0, D(row * Fs.Length + j), "")
+                      End Function
+            M.MassSource.SelfMass = (Col(0, "SourceSelf") = "Yes")
+            M.MassSource.IncludeVertical = (Col(0, "IncVertical") = "Yes")
+            If Col(0, "SourceAdded") = "Yes" Then
+                Dim V2, N2 As Integer, F2() As String = Nothing, D2() As String = Nothing
+                If Sap.DatabaseTables.GetTableForEditingArray("Joint Assignments - Additional Mass", "", V2, F2, N2, D2) = 0 AndAlso N2 > 0 Then Note("additional joint masses (" & N2 & " rows)")
+                If Sap.DatabaseTables.GetTableForEditingArray("Frame Assignments - Additional Mass", "", V2, F2, N2, D2) = 0 AndAlso N2 > 0 Then Note("additional frame masses (" & N2 & " rows)")
+            End If
+            If Col(0, "SourceLoads") = "Yes" Then
+                For r = 0 To N - 1
+                    Dim lp As String = Col(r, "LoadPattern")
+                    If lp <> "" Then M.MassSource.Patterns.Add(New FemTerm With {.Name = lp, .Factor = Double.Parse(Col(r, "Multiplier"), CultureInfo.InvariantCulture)})
+                Next
+            End If
+            If Col(0, "LumpMass") <> "Yes" Then Note("consistent mass (only lumped mass is modelled)")
+        End If
+        'response spectrum functions
+        Dim nf As Integer, fn() As String = Nothing, ft() As Integer = Nothing
+        Sap.Func.GetNameList(nf, fn, 0)
+        For Each name In If(fn, New String() {})
+            Dim nv As Integer, tt() As Double = Nothing, vv() As Double = Nothing
+            If Sap.Func.GetValues(name, nv, tt, vv) = 0 AndAlso nv > 1 Then M.Spectra.Add(New FemSpectrum With {.Name = name, .T = tt, .Sa = vv})
+        Next
+        'response spectrum cases
+        Dim NC As Integer, Names() As String = Nothing
+        Sap.LoadCases.GetNameList(NC, Names)
+        For Each nm In Names
+            Dim ct As eLoadCaseType, st As Integer
+            If Sap.LoadCases.GetTypeOAPI(nm, ct, st) <> 0 Then Continue For
+            If ct = eLoadCaseType.ResponseSpectrum Then
+                Dim nl As Integer, ln() As String = Nothing, fu() As String = Nothing, sf() As Double = Nothing, cs() As String = Nothing, an() As Double = Nothing
+                If Sap.LoadCases.ResponseSpectrum.GetLoads(nm, nl, ln, fu, sf, cs, an) <> 0 Then Continue For
+                If nl <> 1 Then Note("response spectrum case " & nm & " with " & nl & " directions") : Continue For
+                Dim R As New FemRSCase With {.Name = nm, .Spectrum = fu(0), .ScaleFactor = sf(0)}
+                R.Direction = If(ln(0) = "U1", 0, If(ln(0) = "U2", 1, 2))
+                If an(0) <> 0 Then Note("response spectrum angle " & an(0) & " (" & nm & ")")
+                Dim dmp As Double
+                If Sap.LoadCases.ResponseSpectrum.GetDampConstant(nm, dmp) = 0 Then R.Damping = dmp
+                Dim ecc As Double
+                If Sap.LoadCases.ResponseSpectrum.GetEccentricity(nm, ecc) = 0 Then R.Eccentricity = ecc
+                M.RSCases.Add(R)
+            ElseIf ct = eLoadCaseType.Modal Then
+                Dim mx, mn As Integer
+                If Sap.LoadCases.ModalEigen.GetNumberModes(nm, mx, mn) = 0 Then M.ModalName = nm : M.ModalCount = mx
+            End If
+        Next
+    End Sub
 
     Private Sub ReadPoints()
         Dim N As Integer, Names() As String = Nothing
@@ -136,7 +192,7 @@ Public Class EtabsReader
         S.E = E : S.G = G
         Dim W, Ms As Double
         Sap.PropMaterial.GetWeightAndMass(mat, W, Ms, Tmp)
-        S.UnitWeight = W
+        S.UnitWeight = W : S.UnitMass = Ms
         Dim secMod() As Double = Nothing
         If Sap.PropFrame.GetModifiers(Name, secMod) = 0 AndAlso secMod IsNot Nothing AndAlso secMod.Length >= 8 Then
             For i = 0 To 7 : S.Modifier(i) = secMod(i) : Next

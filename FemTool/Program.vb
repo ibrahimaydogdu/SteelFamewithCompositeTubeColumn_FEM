@@ -23,6 +23,10 @@ Public Module Program
             End If
             If args(0) = "selftest" Then
                 SelfTest()
+            ElseIf args(0) = "rs" Then
+                RsCompare(args(1))
+            ElseIf args(0) = "modal" Then
+                ModalCompare(args(1))
             ElseIf args(0) = "tables" Then
                 DumpTables(args(1), args(2))
             ElseIf args(0) = "info" Then
@@ -95,6 +99,235 @@ Public Module Program
     End Sub
 
     '_______________________________________________________________________________________________
+    '_______________________________________________________________________________________________
+    'Periods and participating mass ratios of the modal case: FEM against ETABS
+    Private Sub ModalCompare(ByVal File As String)
+        StartEtabs()
+        Try
+            Console.WriteLine("open " & Sap.File.OpenFile(File))
+            Sap.SetPresentUnits(eUnits.kN_m_C)
+            NoPDelta()
+            If Environment.GetEnvironmentVariable("FEM_DESIGNFIRST") = "1" Then
+                Console.WriteLine("design first: analysis " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign() & ", unlock " & Sap.SetModelIsLocked(False))
+            End If
+            Dim M = New EtabsReader(Sap).Read()
+            For Each n In M.Notes : Console.WriteLine("  NOTE " & n) : Next
+            If Environment.GetEnvironmentVariable("FEM_DAM") = "1" Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8 : Console.WriteLine("DAM stiffness reduction 0.8 applied")
+            Console.WriteLine("modal case " & M.ModalName & ", modes " & M.ModalCount & "; mass source: self " & M.MassSource.SelfMass & ", vertical " & M.MassSource.IncludeVertical & ", patterns " & String.Join(",", M.MassSource.Patterns.Select(Function(t) t.Name & "x" & t.Factor)))
+            Console.WriteLine("ETABS analysis: " & Sap.Analyze.RunAnalysis())
+            Dim sw = Stopwatch.StartNew()
+            Dim fem As New FemStatic(M)
+            Dim R = fem.ModalSolve(Math.Min(M.ModalCount, 12))
+            Dim nm As Integer = R.Period.Length
+            Console.WriteLine("FEM modal solution " & sw.Elapsed.TotalMilliseconds.ToString("0") & " ms, iterations " & R.Iterations & ", free DOF " & fem.NFree)
+            Sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+            Sap.Results.Setup.SetCaseSelectedForOutput(M.ModalName, True)
+            Dim n1 As Integer, LC() As String = Nothing, StT() As String = Nothing, SN() As Double = Nothing, Per() As Double = Nothing, Fr() As Double = Nothing, Cf() As Double = Nothing, Ev() As Double = Nothing
+            Sap.Results.ModalPeriod(n1, LC, StT, SN, Per, Fr, Cf, Ev)
+            Dim n2 As Integer, LC2() As String = Nothing, ST2() As String = Nothing, SN2() As Double = Nothing, P2() As Double = Nothing
+            Dim UX() As Double = Nothing, UY() As Double = Nothing, UZ() As Double = Nothing, SX() As Double = Nothing, SY() As Double = Nothing, SZ() As Double = Nothing
+            Dim RX() As Double = Nothing, RY() As Double = Nothing, RZ() As Double = Nothing, SRX() As Double = Nothing, SRY() As Double = Nothing, SRZ() As Double = Nothing
+            Sap.Results.ModalParticipatingMassRatios(n2, LC2, ST2, SN2, P2, UX, UY, UZ, SX, SY, SZ, RX, RY, RZ, SRX, SRY, SRZ)
+            Console.WriteLine("mode   T ETABS    T FEM    error %    UX ETABS   UX FEM     UY ETABS   UY FEM")
+            Dim worst As Double = 0
+            For k = 0 To nm - 1
+                If k >= n1 Then Exit For
+                Dim e As Double = (R.Period(k) - Per(k)) / Per(k) * 100
+                worst = Math.Max(worst, Math.Abs(e))
+                Console.WriteLine((k + 1).ToString().PadLeft(4) & Per(k).ToString("0.00000").PadLeft(12) & R.Period(k).ToString("0.00000").PadLeft(11) & e.ToString("0.0000").PadLeft(11) & UX(k).ToString("0.0000").PadLeft(12) & R.MassRatio(k, 0).ToString("0.0000").PadLeft(10) & UY(k).ToString("0.0000").PadLeft(12) & R.MassRatio(k, 1).ToString("0.0000").PadLeft(10))
+            Next
+            Console.WriteLine("worst period error " & worst.ToString("0.0000") & "%; total mass X " & R.TotalMass(0).ToString("0.000") & " Y " & R.TotalMass(1).ToString("0.000") & " (t)")
+        Finally
+            StopEtabs()
+        End Try
+    End Sub
+
+    '_______________________________________________________________________________________________
+    'Response spectrum cases: FEM against ETABS (displacements, base reactions, member end forces; magnitudes)
+    Private Sub RsCompare(ByVal File As String)
+        StartEtabs()
+        Try
+            Console.WriteLine("open " & Sap.File.OpenFile(File))
+            Sap.SetPresentUnits(eUnits.kN_m_C)
+            NoPDelta()
+            If Environment.GetEnvironmentVariable("FEM_DESIGNFIRST") = "1" Then
+                Console.WriteLine("design first: analysis " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign() & ", unlock " & Sap.SetModelIsLocked(False))
+            End If
+            Dim eccEnv As String = Environment.GetEnvironmentVariable("FEM_ECC")
+            Dim NC As Integer, Names() As String = Nothing
+            Sap.LoadCases.GetNameList(NC, Names)
+            For Each nm0 In Names
+                Dim ct As eLoadCaseType, st0 As Integer
+                If Not String.IsNullOrEmpty(eccEnv) AndAlso Sap.LoadCases.GetTypeOAPI(nm0, ct, st0) = 0 AndAlso ct = eLoadCaseType.ResponseSpectrum Then
+                    Dim e0 As Double = Double.Parse(eccEnv, CultureInfo.InvariantCulture)
+                    Console.WriteLine("eccentricity of " & nm0 & " set to " & e0 & ": " & Sap.LoadCases.ResponseSpectrum.SetEccentricity(nm0, e0))
+                End If
+            Next
+            Console.WriteLine("ETABS analysis: " & Sap.Analyze.RunAnalysis())
+            Dim M = New EtabsReader(Sap).Read()
+            If Environment.GetEnvironmentVariable("FEM_DAM") = "1" Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
+            Console.WriteLine("patterns: " & String.Join(", ", M.Patterns.Select(Function(p) p.Name & "[nodal " & p.NodalLoads.Count & ", dist " & p.DistLoads.Count & "]")))
+            For Each cb In M.Combos.Where(Function(c) c.Name.StartsWith("~"))
+                Console.WriteLine("combo " & cb.Name & ": " & String.Join(" + ", cb.Terms.Select(Function(x) x.Factor & " x " & x.Name)))
+            Next
+            Console.WriteLine("RS cases: " & String.Join(", ", M.RSCases.Select(Function(c) c.Name & " dir " & c.Direction & " sf " & c.ScaleFactor.ToString("0.0000") & " ecc " & c.Eccentricity & " damp " & c.Damping & " " & c.Spectrum)))
+            Dim fem As New FemStatic(M)
+            Dim sw = Stopwatch.StartNew()
+            Dim Md = fem.ModalSolve(M.ModalCount)
+            Console.WriteLine("modal " & sw.ElapsedMilliseconds & " ms, modes " & Md.Period.Length)
+            For Each rc In M.RSCases
+                sw.Restart()
+                Dim Rr = fem.ResponseSpectrum(Md, rc)
+                Console.WriteLine("RS " & rc.Name & " FEM " & sw.ElapsedMilliseconds & " ms")
+                Sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+                Sap.Results.Setup.SetCaseSelectedForOutput(rc.Name, True)
+                Dim tp As Integer = M.PatternIndex("~Torsion" & rc.Name)
+                If tp >= 0 Then
+                    Console.WriteLine("  ETABS pattern ~Torsion" & rc.Name & " nodal loads:")
+                    For Each nl In M.Patterns(tp).NodalLoads
+                        Dim nd As FemNode = M.Nodes(nl.Node)
+                        Console.WriteLine("     node " & nd.Name & " z " & nd.Z.ToString("0.00") & " diaphragm " & nd.Diaphragm & " F " & nl.F(0).ToString("0.000") & "," & nl.F(1).ToString("0.000") & " M3 " & nl.F(5).ToString("0.000") & "   FEM diaphragm force " & If(nd.Diaphragm >= 0, Rr.DiaphragmForce(nd.Diaphragm).ToString("0.000"), "-"))
+                    Next
+                End If
+                Dim nr As Integer, Obj() As String = Nothing, Elm() As String = Nothing, LC() As String = Nothing, StepT() As String = Nothing, SN() As Double = Nothing
+                Dim U1() As Double = Nothing, U2() As Double = Nothing, U3() As Double = Nothing, R1() As Double = Nothing, R2() As Double = Nothing, R3() As Double = Nothing
+                Sap.Results.JointDispl("All", eItemTypeElm.GroupElm, nr, Obj, Elm, LC, StepT, SN, U1, U2, U3, R1, R2, R3)
+                Dim Att(M.Nodes.Count - 1) As Boolean
+                For Each el In M.Elements : Att(el.NI) = True : Att(el.NJ) = True : Next
+                Dim sc(1) As Double, er(1) As Double
+                For k = 0 To nr - 1
+                    Dim ni As Integer = M.NodeIndex(Obj(k))
+                    If ni < 0 OrElse Not Att(ni) Then Continue For
+                    Dim a() As Double = {U1(k), U2(k), U3(k), R1(k), R2(k), R3(k)}
+                    For d = 0 To 5 : sc(If(d < 3, 0, 1)) = Math.Max(sc(If(d < 3, 0, 1)), Math.Abs(a(d))) : Next
+                Next
+                For k = 0 To nr - 1
+                    Dim ni As Integer = M.NodeIndex(Obj(k))
+                    If ni < 0 OrElse Not Att(ni) Then Continue For
+                    Dim a() As Double = {U1(k), U2(k), U3(k), R1(k), R2(k), R3(k)}
+                    For d = 0 To 5
+                        Dim g As Integer = If(d < 3, 0, 1)
+                        er(g) = Math.Max(er(g), Math.Abs(Math.Abs(a(d)) - Rr.U(ni * 6 + d)) / sc(g))
+                    Next
+                Next
+                Dim EU(M.Nodes.Count * 6 - 1) As Double
+                For k = 0 To nr - 1
+                    Dim ni As Integer = M.NodeIndex(Obj(k))
+                    If ni < 0 Then Continue For
+                    Dim a2() As Double = {U1(k), U2(k), U3(k), R1(k), R2(k), R3(k)}
+                    For d = 0 To 5 : EU(ni * 6 + d) = a2(d) : Next
+                Next
+                TorsionTest(M, rc, Rr, EU, Att)
+                Console.WriteLine("  displacements: max error translations " & (er(0) * 100).ToString("0.000") & "% rotations " & (er(1) * 100).ToString("0.000") & "% (of the largest ETABS value; ETABS max " & sc(0).ToString("0.0000E+00") & ")")
+                'base reaction
+                Dim nb As Integer, bl() As String = Nothing, bs() As String = Nothing, bn() As Double = Nothing, FX() As Double = Nothing, FY() As Double = Nothing, FZ() As Double = Nothing, MX() As Double = Nothing, MyP() As Double = Nothing, MZ() As Double = Nothing
+                Dim gx, gy, gz As Double
+                Sap.Results.BaseReact(nb, bl, bs, bn, FX, FY, FZ, MX, MyP, MZ, gx, gy, gz)
+                Console.WriteLine("  base shear: ETABS FX " & FX(0).ToString("0.000") & " FY " & FY(0).ToString("0.000") & "   FEM FX " & Rr.BaseForce(0).ToString("0.000") & " FY " & Rr.BaseForce(1).ToString("0.000"))
+                'FEM base shear: CQC of the sum of reactions needs the modal sums: use the combined individual reactions upper bound check
+                'member forces
+                Dim nf As Integer, FO() As String = Nothing, FSta() As Double = Nothing, FE() As String = Nothing, FES() As Double = Nothing, FLC() As String = Nothing, FST() As String = Nothing, FSN() As Double = Nothing
+                Dim P() As Double = Nothing, V2() As Double = Nothing, V3() As Double = Nothing, Tor() As Double = Nothing, Mo2() As Double = Nothing, Mo3() As Double = Nothing
+                Sap.Results.FrameForce("All", eItemTypeElm.GroupElm, nf, FO, FSta, FE, FES, FLC, FST, FSN, P, V2, V3, Tor, Mo2, Mo3)
+                Dim EIdx As New Dictionary(Of String, Integer)
+                For i = 0 To M.Elements.Count - 1 : EIdx(M.Elements(i).Name) = i : Next
+                Dim cmax(5) As Double, cerr(5) As Double
+                Dim First As New Dictionary(Of String, Integer), Last As New Dictionary(Of String, Integer)
+                For k = 0 To nf - 1
+                    If Not First.ContainsKey(FO(k)) OrElse FSta(k) < FSta(First(FO(k))) Then First(FO(k)) = k
+                    If Not Last.ContainsKey(FO(k)) OrElse FSta(k) > FSta(Last(FO(k))) Then Last(FO(k)) = k
+                Next
+                For Each kv In First
+                    Dim e As Integer = EIdx(kv.Key), kI As Integer = kv.Value, kJ As Integer = Last(kv.Key)
+                    Dim f = Rr.FaceForce(e)
+                    Dim eI() As Double = {P(kI), V2(kI), V3(kI), Tor(kI), Mo2(kI), Mo3(kI)}, eJ() As Double = {P(kJ), V2(kJ), V3(kJ), Tor(kJ), Mo2(kJ), Mo3(kJ)}
+                    For d = 0 To 5
+                        cmax(d) = Math.Max(cmax(d), Math.Max(Math.Abs(eI(d)), Math.Abs(eJ(d))))
+                        cerr(d) = Math.Max(cerr(d), Math.Max(Math.Abs(Math.Abs(eI(d)) - f(d)), Math.Abs(Math.Abs(eJ(d)) - f(6 + d))))
+                    Next
+                Next
+                Console.WriteLine("  member forces (max error / max value): " & String.Join(" | ", Enumerable.Range(0, 6).Select(Function(d) {"P", "V2", "V3", "T", "M2", "M3"}(d) & " " & cerr(d).ToString("0.000") & " / " & cmax(d).ToString("0.00") & " (" & (cerr(d) / Math.Max(cmax(d), 1.0E-9) * 100).ToString("0.000") & "%)")))
+            Next
+        Finally
+            StopEtabs()
+        End Try
+    End Sub
+
+    'Hypothesis test of the accidental eccentricity of the RS cases: static torsion with M_k = F_k x ecc x L_k (F_k: CQC diaphragm force),
+    'combined with the RS result by absolute sum or by SRSS; compared with the ETABS displacements
+    Private Sub TorsionTest(ByVal M As FemModel, ByVal rc As FemRSCase, ByVal Rr As RSResults, ByVal EtabsU() As Double, ByVal Att() As Boolean)
+        If M.DiaphragmCount = 0 OrElse rc.Eccentricity = 0 Then Return
+        Dim nd As Integer = M.DiaphragmCount
+        Dim M2 As FemModel = M
+        Dim first As Integer = M2.Patterns.Count
+        For k = 0 To nd - 1
+            Dim P As New FemPattern With {.Name = "TQ" & k}
+            Dim ni As Integer = Enumerable.Range(0, M.Nodes.Count).First(Function(i) Att(i) AndAlso M.Nodes(i).Diaphragm = k)
+            Dim nl As New FemNodalLoad With {.Node = ni}
+            nl.F(5) = 1.0
+            P.NodalLoads.Add(nl)
+            M2.Patterns.Add(P)
+        Next
+        Dim Res = New FemStatic(M2).Solve()
+        M2.Patterns.RemoveRange(first, nd)
+        For Each opt In {"Lperp", "Lpar"}
+            Dim Ls(nd - 1) As Double
+            For k = 0 To nd - 1
+                Dim xs = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.X)
+                Dim ys = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.Y)
+                Dim lx As Double = xs.Max() - xs.Min(), ly As Double = ys.Max() - ys.Min()
+                Dim perp As Double = If(rc.Direction = 0, ly, lx)
+                Dim par As Double = If(rc.Direction = 0, lx, ly)
+                Ls(k) = If(opt = "Lperp", perp, par)
+            Next
+            Dim Tor(M.Nodes.Count * 6 - 1) As Double
+            For k = 0 To nd - 1
+                Dim mk As Double = Rr.DiaphragmForce(k) * rc.Eccentricity * Ls(k)
+                For i = 0 To Tor.Length - 1 : Tor(i) += mk * Res.U(first + k)(i) : Next
+            Next
+            If opt = "Lperp" Then
+                For Each cmul In {0.9, 0.95, 0.98, 1.0, 1.02, 1.05, 1.1}
+                    Dim sc0 As Double = 0, er0 As Double = 0
+                    For i = 0 To Tor.Length - 1
+                        If Not Att(i \ 6) OrElse (i Mod 6) >= 3 Then Continue For
+                        sc0 = Math.Max(sc0, Math.Abs(EtabsU(i)))
+                    Next
+                    For i = 0 To Tor.Length - 1
+                        If Not Att(i \ 6) OrElse (i Mod 6) >= 3 Then Continue For
+                        er0 = Math.Max(er0, Math.Abs(Rr.U(i) + cmul * Math.Abs(Tor(i)) - Math.Abs(EtabsU(i))) / sc0)
+                    Next
+                    Console.WriteLine("    torsion multiplier " & cmul & ": max translation error " & (er0 * 100).ToString("0.0000") & "%")
+                Next
+            End If
+            For Each comb In {"abs sum", "SRSS"}
+                Dim sc As Double = 0, er As Double = 0
+                For i = 0 To Tor.Length - 1
+                    If Not Att(i \ 6) OrElse (i Mod 6) >= 3 Then Continue For
+                    sc = Math.Max(sc, Math.Abs(EtabsU(i)))
+                Next
+                For i = 0 To Tor.Length - 1
+                    If Not Att(i \ 6) OrElse (i Mod 6) >= 3 Then Continue For
+                    Dim v As Double = If(comb = "abs sum", Rr.U(i) + Math.Abs(Tor(i)), Math.Sqrt(Rr.U(i) ^ 2 + Tor(i) ^ 2))
+                    er = Math.Max(er, Math.Abs(v - Math.Abs(EtabsU(i))) / sc)
+                Next
+                Console.WriteLine("  eccentricity hypothesis " & opt & " / " & comb & ": max translation error " & (er * 100).ToString("0.000") & "%")
+            Next
+        Next
+    End Sub
+
+    Private Sub NoPDelta()
+        Dim PVer, PNR As Integer, PFs() As String = Nothing, PDt() As String = Nothing
+        If Sap.DatabaseTables.GetTableForEditingArray("P-Delta Option Definition", "", PVer, PFs, PNR, PDt) = 0 AndAlso PNR > 0 Then
+            Dim iM As Integer = Array.IndexOf(PFs, "AutoMethod")
+            If iM >= 0 AndAlso PDt(iM) <> "None" Then
+                PDt(iM) = "None"
+                Sap.DatabaseTables.SetTableForEditingArray("P-Delta Option Definition", PVer, PFs, PNR, PDt)
+                Dim a, b, c, d As Integer, Lg As String = Nothing
+                Sap.DatabaseTables.ApplyEditedTables(True, a, b, c, d, Lg)
+            End If
+        End If
+    End Sub
+
     Private Sub DumpTables(ByVal File As String, ByVal Keys As String)
         StartEtabs()
         Try

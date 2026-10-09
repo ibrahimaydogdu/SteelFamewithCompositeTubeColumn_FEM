@@ -12,7 +12,7 @@ End Class
 
 'Linear static solver: 3D frame, rigid diaphragms (one per story, master DOF Ux Uy Rz at the centroid), restraints, releases.
 'The DOF map keeps for every node DOF the reduced DOF it depends on (a free DOF: itself; a diaphragm slave: the three masters).
-Public Class FemStatic
+Partial Public Class FemStatic
     Private ReadOnly M As FemModel
     Private MapIdx()() As Integer
     Private MapCoef()() As Double
@@ -47,7 +47,7 @@ Public Class FemStatic
             Dim nd = M.Nodes(i)
             For d = 0 To 5
                 Dim dof As Integer = i * 6 + d
-                If nd.Restraint(d) OrElse Not Attached(i) Then
+                If nd.Restraint(d) OrElse (Not Attached(i) AndAlso Not (nd.Diaphragm >= 0 AndAlso (d = 0 OrElse d = 1 OrElse d = 5))) Then
                     MapIdx(dof) = New Integer() {} : MapCoef(dof) = New Double() {}
                 ElseIf nd.Diaphragm >= 0 AndAlso (d = 0 OrElse d = 1 OrElse d = 5) Then
                     Dim k As Integer = nd.Diaphragm

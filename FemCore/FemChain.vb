@@ -254,7 +254,7 @@ Public Module FemChain
         Next
         Dim uI(R.NInternal - 1) As Double
         For i = 0 To R.NInternal - 1
-            Dim s As Double = R.H(p)(i)
+            Dim s As Double = If(p >= 0, R.H(p)(i), 0.0)
             For j = 0 To 11 : s -= R.G(i, j) * uE(j) : Next
             uI(i) = s
         Next
@@ -266,7 +266,7 @@ Public Module FemChain
         For i = 0 To 11
             Dim s As Double = 0
             For j = 0 To 11 : s += R.ClearK(i, j) * uf(j) : Next
-            f(i) = s - R.ClearLoad(p)(i)
+            f(i) = s - If(p >= 0, R.ClearLoad(p)(i), 0.0)
         Next
         Return f
     End Function

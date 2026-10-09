@@ -8,6 +8,7 @@ Public Class FemNode
     Public X, Y, Z As Double
     Public Restraint(5) As Boolean
     Public Diaphragm As Integer = -1            'index in FemModel.Diaphragms, -1 = none
+    Public AddedMass() As Double                'additional translational masses (X, Y, Z) assigned to the joint
 End Class
 
 Public Class FemSection
@@ -16,6 +17,7 @@ Public Class FemSection
     Public E, G As Double                       'kN/m2
     Public A, As2, As3, J, I22, I33 As Double   'm2, m4 (As2 / As3 = 0: no shear deformation)
     Public UnitWeight As Double                 'kN/m3 (self weight)
+    Public UnitMass As Double                   'kN s2/m4 (mass density)
     Public Depth, Width, FlangeThickness, WebThickness As Double    'm (I sections; design checks)
     Public Fy, Fu As Double                     'kN/m2
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'property modifiers: area, As2, As3, torsion, I22, I33, mass, weight
@@ -90,6 +92,11 @@ Public Class FemModel
     Public Patterns As New List(Of FemPattern)
     Public Combos As New List(Of FemCombo)
     Public DiaphragmCount As Integer
+    Public MassSource As New FemMassSource
+    Public Spectra As New List(Of FemSpectrum)
+    Public RSCases As New List(Of FemRSCase)
+    Public ModalName As String
+    Public ModalCount As Integer
     Public AxialFactor As Double = 1.0           'stiffness reduction of the Direct Analysis Method applied by ETABS after a design run: EA
     Public FlexuralFactor As Double = 1.0        'and EI (0.8, tau-b = 1)
     Public Notes As New List(Of String)         'unsupported features, assumptions

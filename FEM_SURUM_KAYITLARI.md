@@ -34,4 +34,31 @@ Bu klasör, `SteelFamewithCompositeTubeColumn_ETABS` projesinin (0.5.1, commit 0
 | **525M** (25 kat, 525 eleman, kardinal nokta 8, ofsetler, diyafram yok), DAM ile; Dead, Live, Live_r, WindX, WindY | yerdeğiştirme, dönme, tepki ve uç kuvvetleri **%0,000** (4 anlamlı hane) |
 | Süre | FEM çözümü P4: 100–140 ms (7–10 desen, yoğun Cholesky); 525M: ~1 s (1350 serbestlik derecesi, 5 desen). ETABS: P4 ~14 s, 525M 26–35 s |
 
-**Sonraki:** F2 modal analiz ve tepki spektrumu; F3 ikinci mertebe (P-Δ / Direct Analysis); F4 AISC 360-22 çelik tasarım; sonra AISC 341, optimizasyon entegrasyonu, ETABS ile final doğrulama.
+
+## Aşama F2: modal analiz ve tepki spektrumu (2026-10-09)
+
+**Kod:** `FemCore/FemModal.vb` (`FemStatic` kısmi sınıfı): topaklanmış düğüm kütleleri, alt uzay yinelemesi (Cholesky ile; MathNet), CQC tepki spektrumu, kazara dışmerkezlik. `EtabsReader`: kütle kaynağı tablosu, spektrum fonksiyonları (`Func.GetValues`), RS ve modal durumlar. `FemTool modal|rs <model>`.
+
+**Kütle (ETABS davranışı, ölçüldü):**
+- Kütle kaynağı tablosu (`Mass Source Definition`): kendi kütlesi, seçili yük desenleri × çarpan (P4: SDL ×1, PartMass ×1), `IncVertical = No` → düşey kütle yok.
+- Eleman kütlesi uçlara yarı yarıya, kendi ağırlığı ile aynı boy kuralı (düşey eleman tam boy, diğerleri net boy). Yük kütlesi: desenin eşdeğer düğüm yükünün düşey bileşeni / g (g = 9,80665).
+- Dönme kütlesi düğümlerde yok; diyafram dönme ataleti düğüm kütlelerinden gelir.
+
+**Modal sonuçlar (DAM 0,8 ile):**
+| Model | Periyot hatası | Katılım oranı |
+|---|---|---|
+| P4 (12 mod) | 0,0000 % (yatay modlar), −0,016 % (burulma modları) | UX, UY aynı (4 hane) |
+| 525M (12 mod, diyafram yok) | 0,0000 % | aynı |
+
+Süre: P4 0,5 s; 525M 8,7 s (yoğun matrislerle; birleştirme aşamasında hızlandırılacak).
+
+**Tepki spektrumu (P4, RSX ve RSY):**
+- Eşdeğer ivme = ölçek çarpanı (API'den, m/s², g dahil) × spektrum ordinatı (tablo, doğrusal aradeğerleme); mod genliği Γ·a/ω²; CQC (sönüm 0,05, durumdan okunur).
+- **Kazara dışmerkezlik yok (ecc = 0):** yerdeğiştirme, taban kesmesi (518,558 kN / 436,352 kN) ve tüm uç kuvvetleri **%0,000**.
+- **Kazara dışmerkezlik = 0,05 (ModelBuilder varsayılanı):** ETABS, her diyafram için statik burulma tepkisini RS sonucuna **mutlak değerle ekliyor**. Burulma momenti M_k = F_k · ecc · L_k (F_k: diyaframın CQC atalet kuvveti; L_k: yön doğrultusuna dik diyafram boyutu, düğümlerin sınırlayıcı kutusu). ETABS'in `~Torsion<RS>` durumu sıfır döndürüyor (otomatik desen `~RSXECC`, değerleri API'den okunamıyor), bu yüzden kural varsayım–deney ile bulundu: yerdeğiştirme hatası %5,7 → **%0,20**; uç kuvvetleri ≤ %0,3–0,8 (burulma kuvveti T: tamamı 0,1 kN·m mertebesinde, %1,5–2).
+- Kalan %0,2 farkın nedeni araştırılmadı (burulma çarpanı 0,95–0,98 deneyinde hata %0,05–0,10'a iniyor; muhtemelen F_k tanımı); hata payı içinde olduğundan şimdilik bırakıldı.
+- Süre: tek RS durumu 6–13 ms (dışmerkezlik dahil 80–220 ms: burulma için ikinci bir statik çözüm yapılıyor, birleştirmede önbelleğe alınacak).
+
+**Notlar:** ETABS otomatik desenleri (`~LLRF`, `~RSXECC`) analizden sonra oluşuyor; tasarım çalıştırıp kilit açılınca siliniyor. Diyaframa bağlı olup eleman bağlamayan düğümler (ETABS'in diyafram merkezi noktaları) artık yalnızca yük taşımak için diyafram eşlemesine alınıyor.
+
+**Sonraki:** F3 ikinci mertebe (P-Δ / Direct Analysis); F4 AISC 360-22 çelik tasarım; AISC 341; optimizasyon entegrasyonu ve ETABS ile final doğrulama.
