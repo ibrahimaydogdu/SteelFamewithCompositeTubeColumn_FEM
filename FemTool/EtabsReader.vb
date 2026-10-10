@@ -304,6 +304,7 @@ Public Class EtabsReader
             Dim ct As eLoadCaseType, st As Integer
             If Sap.LoadCases.GetTypeOAPI(nm, ct, st) <> 0 Then Continue For
             Dim nl As Integer, lt() As String = Nothing, ln() As String = Nothing, sf() As Double = Nothing
+            Dim nlFlag As Boolean = False
             If ct = eLoadCaseType.ResponseSpectrum Then
                 Flat(nm) = New List(Of FemTerm) From {New FemTerm With {.Name = "@RS:" & nm, .Factor = 1.0}}
                 Continue For
@@ -311,6 +312,7 @@ Public Class EtabsReader
             If ct = eLoadCaseType.NonlinearStatic Then
                 If Sap.LoadCases.StaticNonlinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
                 M.NonlinearCases.Add(nm)
+                nlFlag = True
             ElseIf ct = eLoadCaseType.LinearStatic Then
                 If Sap.LoadCases.StaticLinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
             Else
@@ -323,6 +325,7 @@ Public Class EtabsReader
                 If lt(k) <> "Load" Then Note("static case " & nm & " has load type " & lt(k)) : Continue For
                 Terms.Add(New FemTerm With {.Name = ln(k), .Factor = sf(k)})
             Next
+            If nlFlag Then Terms.Add(New FemTerm With {.Name = "@NL", .Factor = 0})
             Flat(nm) = Terms
         Next
         Dim NC As Integer, Cn() As String = Nothing
@@ -349,6 +352,7 @@ Public Class EtabsReader
         For Each kv In Flat
             Dim C As New FemCombo With {.Name = kv.Key}
             For Each t In kv.Value
+                If t.Name = "@NL" Then C.Nonlinear = True : Continue For
                 Dim lst As List(Of FemTerm) = If(t.Name.StartsWith("@RS:"), C.RSTerms, C.Terms)
                 Dim nmT As String = If(t.Name.StartsWith("@RS:"), t.Name.Substring(4), t.Name)
                 Dim ex = lst.FirstOrDefault(Function(x) x.Name = nmT)

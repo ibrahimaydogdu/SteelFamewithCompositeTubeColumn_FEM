@@ -91,3 +91,28 @@ Rastgele kesitli (hafif, esnek) P4 modeliyle yapılan karşılaştırma, eleman 
 - eleman uç kuvvetleri ve mesnet tepkileri bu terim olmadan elastik rijitlikten hesaplanır; P-Δ kuvvetleri tepki olarak diyafram merkez noktalarında görünür (bu noktalar gerçek mesnet değildir, karşılaştırmaya alınmaz).
 
 Bu biçimle sonuçlar: P4 statik (varsayılan ve rastgele kesitler): yerdeğiştirme, dönme ve **bütün eleman uç kuvvetleri %0,000**; modal periyot hatası 0,0000 % (burulma modları −0,016 %); RSX/RSY yerdeğiştirme %0,10–0,12, kuvvetler ≤ %0,2–0,5. Önceki eleman-geometrik-rijitlik yaklaşımı yalnızca P-Δ'lı **doğrusal olmayan statik durumlar** için (525M) kullanılır (yukarıdaki tablo).
+
+## Aşama F4: AISC 360-22 çelik tasarım (2026-10-10)
+
+**Kod:** `FemCore/FemDesign.vb` (kesit sınıfı, basınç E3/E7, tek eksenli eğilme F2/F3/F6, kesme G2/G6, Cb), `FemDesignDriver.vb` (istasyon kuvvetleri, kombinasyonlar, H1 etkileşimi, eleman zarfı), `FemPDelta.vb` (`DesignNonlinear`). Okuyucu: kesit özellikleri (S, Z, r, fillet), dayanım kombinasyonları, ön tercihler (φ, D/C sınırı), tasarım overwrite'ları (LMajor, LMinor, LTB). `FemTool designcmp <model>`: ETABS tasarım oranları ile karşılaştırma.
+
+**ETABS davranışları (ölçüldü):**
+1. **İstasyonlar:** düşey elemanlarda net boyda 3 istasyon (uçlar ve orta), diğerlerinde en çok 0,5 m aralık (12–16 aralık). İstasyon kuvvetleri yüz kuvvetlerinden ve yüklerden denge ile.
+2. **Tepki spektrumlu kombinasyonlar:** RS sonuçları (CQC + kazara dışmerkezlik) **bileşen bileşen en kötü büyüklükle** statik kısma eklenir: |statik| + RS (her bileşen için bağımsız). Eksenel kuvvet, M2 ve M3 aynı işaret çifti içinde birlikte alınmaz.
+3. **Basınç/etkileşim:** K = 1 (DAM); Pr/Pc ≥ 0,2 için H1-1a, aksi hâlde H1-1b; tek ayrı "P oranı" olarak Pr/(2Pc) raporlanır. B1 genliği (P-δ) gözlenen örneklerde etkisiz. Çekme: min(φ Fy Ag, φ Fu Ag).
+4. **Yanal burkulma:** varsayılan desteksiz boy = net boy; Cb tüm boy için. **LTB overwrite'ı (ModelBuilder 2,5 m desteği) varsa:** boy = ratio × eklem-eklem boy ve Cb her istasyon için, **istasyon merkezli, Lb uzunluklu pencerede** (çeyrek noktalar, pencere açıklık içine kaydırılır) hesaplanır. Bu kural 5 ve 6 m kirişlerde birebir tuttu.
+5. P-δ'ın istasyon momentlerine etkisi (eksenel kuvvet × kiriş kord dönmesi) ETABS'te var, FEM'de yok (aşağıda).
+
+**Sonuçlar (ETABS ile D/C oranı karşılaştırması; PMM oranı = tasarım zarfı):**
+| Model / tasarım | Üye | Ortalama bağıl hata | %95 | En büyük |
+|---|---|---|---|---|
+| P4, rastgele kesitli 8 tasarım (kolon + kiriş, gravite, rüzgâr ve RS kombinasyonları, desteksiz ve destekli) | 50–80 | 0,03–0,77 % | 0,10–2,54 % | 0,17–2,74 % |
+| P4 desteksiz model, 2 rastgele tasarım | 34–48 | 0,08 / 0,16 % | — | 0,69 / 0,70 % |
+| 525M (25 kat, 525 eleman, P-Δ'lı doğrusal olmayan kombinasyonlar, otomatik seçim listeleri çözülmüş) | 525 | **0,64 %** | **2,29 %** | 6,34 % (50 kiriş %2–6 arası, FEM daha düşük) |
+| Kesme oranı (tüm üyeler) | — | 0,08–0,75 % (P4), **0,10 % (525M)** | — | 3,7 % (P4), 0,34 % (525M) |
+
+- **Ön koşul:** modelde otomatik seçim listesi varsa ETABS tasarım kesitini analiz kesitinden farklı seçer; karşılaştırma için tasarım kesitleri çerçevelere atanıp yeniden analiz edilmelidir (iyileştirici zaten açık kesit atıyor).
+- **Bilinen sınır (525M'de 50 kiriş, FEM %2–6 düşük):** eksenel kuvvetli (çekme/basınç) kirişlerde ETABS, M2 diyagramına P × kord dönmesi terimini ekliyor (örnek: M2 eğimi 3,06 kN·m/m, V3 = 2,50); FEM yalnızca birinci mertebe denge kullanıyor. P4'te etkisi yok (kütle tabanlı P-Δ elemanlara eksenel geometrik rijitlik eklemiyor). Entegrasyondan önce eklenecek veya fark çarpanıyla kapatılacak.
+- **Süre:** 525M'de 525 üye × 3 P-Δ'lı kombinasyon: 10 s (çoğu P-Δ yinelemesi); P4: 70–190 ms.
+
+**Sonraki:** F5 AISC 341 (SCWB oranı, süneklik süzgeci, Lb/ry) ve kompozit/hibrit; F6 optimizasyon entegrasyonu (önbellek, hız) ve final ETABS doğrulaması.

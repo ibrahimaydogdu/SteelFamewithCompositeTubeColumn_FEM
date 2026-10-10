@@ -373,7 +373,28 @@ Public Module Program
             NoPDelta()
             Dim rnd As String = Environment.GetEnvironmentVariable("FEM_RANDOMSECT")
             If Not String.IsNullOrEmpty(rnd) Then RandomSections(Integer.Parse(rnd))
+            If Environment.GetEnvironmentVariable("FEM_PDELTA") = "nl" Then
+                Dim nC As Integer, cNames() As String = Nothing
+                Sap.LoadCases.GetNameList(nC, cNames)
+                For Each cn0 In cNames
+                    Dim ct0 As eLoadCaseType, st00 As Integer
+                    If Sap.LoadCases.GetTypeOAPI(cn0, ct0, st00) = 0 AndAlso ct0 = eLoadCaseType.NonlinearStatic Then Sap.LoadCases.StaticNonlinear.SetGeometricNonlinearity(cn0, 1)
+                Next
+            End If
             Console.WriteLine("analysis " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign())
+            If Environment.GetEnvironmentVariable("FEM_FIXSECT") = "1" Then
+                'models with auto select lists: assign the design sections as the sections of the frames
+                Dim nF As Integer, frs() As String = Nothing, ch As Integer = 0
+                Sap.FrameObj.GetNameList(nF, frs)
+                Sap.SetModelIsLocked(False)
+                For Each f1 In frs
+                    Dim dsn As String = "", cur As String = "", sa As String = ""
+                    Sap.DesignSteel.GetDesignSection(f1, dsn)
+                    Sap.FrameObj.GetSection(f1, cur, sa)
+                    If dsn <> "" AndAlso dsn <> cur Then Sap.FrameObj.SetSection(f1, dsn) : ch += 1
+                Next
+                Console.WriteLine("design sections assigned to " & ch & " frames")
+            End If
             Console.WriteLine("second analysis (DAM state): " & Sap.SetModelIsLocked(False) & " " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign())
             Dim n As Integer, fnm() As String = Nothing, ft() As eFrameDesignOrientation = Nothing, ds() As String = Nothing, stt() As String = Nothing, pc() As String = Nothing
             Dim pmm() As Double = Nothing, pr() As Double = Nothing, mj() As Double = Nothing, mn() As Double = Nothing, vjc() As String = Nothing, vj() As Double = Nothing, vnc() As String = Nothing, vn() As Double = Nothing
@@ -383,7 +404,12 @@ Public Module Program
             Dim femS As New FemStatic(M)
             If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" Then femS.UseMassPDelta()
             Dim Res = femS.Solve()
-            Dim Static1 = M.Combos.Where(Function(c) M.DesignCombos.Contains(c.Name) AndAlso c.RSTerms.Count = 0).ToList()
+            Dim Static1 = M.Combos.Where(Function(c) M.DesignCombos.Contains(c.Name)).ToList()
+            Dim RSd As New Dictionary(Of String, RSResults)
+            If M.RSCases.Count > 0 Then
+                Dim Md = femS.ModalSolve(M.ModalCount)
+                For Each rc In M.RSCases : RSd(rc.Name) = femS.ResponseSpectrum(Md, rc) : Next
+            End If
             Console.WriteLine("design combos " & M.DesignCombos.Count & ", static-only " & Static1.Count & "; DCLimit " & M.Prefs.DCLimit)
             Dim sw = Stopwatch.StartNew()
             Dim trc As String = Environment.GetEnvironmentVariable("FEM_TRACE")
@@ -406,13 +432,16 @@ Public Module Program
                     Console.WriteLine("  ETABS " & FLC(k) & " " & FST(k) & " sta " & FSta(k).ToString("0.000") & " P " & P(k).ToString("0.00") & " V2 " & V2(k).ToString("0.00") & " V3 " & V3(k).ToString("0.00") & " M2 " & Mo2(k).ToString("0.00") & " M3 " & Mo3(k).ToString("0.00"))
                 Next
             End If
-            Dim Fem = femS.DesignMembers(Res, Static1, M.Prefs)
+            Dim Fem = femS.DesignMembers(Res, Static1, M.Prefs, RSd)
+            If Static1.Any(Function(c) c.Nonlinear) Then Fem = femS.DesignNonlinear(Static1, M.Prefs, Fem) : Console.WriteLine("nonlinear combinations designed: " & Static1.Where(Function(c) c.Nonlinear).Count & " (" & sw.ElapsedMilliseconds & " ms in total)")
             Console.WriteLine("FEM design of " & M.Elements.Count & " members: " & sw.ElapsedMilliseconds & " ms")
             Dim EIdx As New Dictionary(Of String, Integer)
             For i = 0 To M.Elements.Count - 1 : EIdx(M.Elements(i).Name) = i : Next
             Dim staticNames As New HashSet(Of String)(Static1.Select(Function(c) c.Name))
+            Dim vcombo As New Dictionary(Of String, String)
             Console.WriteLine("frame  section       ETABS PMM  FEM PMM   P e/f     Mmaj e/f      Mmin e/f      Vmaj e/f      Vmin e/f     ETABS combo / FEM combo")
             Dim cnt As Integer = 0, sumRel As Double = 0, maxRel As Double = 0, worst As String = ""
+            Dim Rows As New List(Of Tuple(Of Double, String))
             For i = 0 To n - 1
                 Dim cmbE As String = pc(i).Replace("(C)", "").Replace("(T)", "")
                 If Not staticNames.Contains(cmbE) Then Continue For
@@ -422,16 +451,53 @@ Public Module Program
                 Dim rel As Double = (f.PMM - pmm(i)) / pmm(i)
                 cnt += 1 : sumRel += Math.Abs(rel)
                 If Math.Abs(rel) > maxRel Then maxRel = Math.Abs(rel) : worst = fnm(i)
-                If cnt <= 60 Then Console.WriteLine(fnm(i).PadRight(6) & ds(i).PadRight(13) & pmm(i).ToString("0.0000").PadLeft(9) & f.PMM.ToString("0.0000").PadLeft(10) & "  " & pr(i).ToString("0.000") & "/" & f.P.ToString("0.000") & "  " & mj(i).ToString("0.000") & "/" & f.MMaj.ToString("0.000") & "  " & mn(i).ToString("0.000") & "/" & f.MMin.ToString("0.000") & "  " & vj(i).ToString("0.000") & "/" & f.VMaj.ToString("0.000") & "  " & vn(i).ToString("0.000") & "/" & f.VMin.ToString("0.000") & "   " & cmbE & " / " & f.PMMCombo)
+                Rows.Add(Tuple.Create(Math.Abs(rel), fnm(i).PadRight(6) & ds(i).PadRight(13) & pmm(i).ToString("0.0000").PadLeft(9) & f.PMM.ToString("0.0000").PadLeft(10) & "  " & pr(i).ToString("0.000") & "/" & f.P.ToString("0.000") & "  " & mj(i).ToString("0.000") & "/" & f.MMaj.ToString("0.000") & "  " & mn(i).ToString("0.000") & "/" & f.MMin.ToString("0.000") & "  " & vj(i).ToString("0.000") & "/" & f.VMaj.ToString("0.000") & "  " & vn(i).ToString("0.000") & "/" & f.VMin.ToString("0.000") & "   " & cmbE & " / " & f.PMMCombo))
             Next
+            For Each rw In Rows.OrderByDescending(Function(x) x.Item1).Take(25) : Console.WriteLine(rw.Item2) : Next
+            If Environment.GetEnvironmentVariable("FEM_CBDATA") = "1" Then
+                Dim nPrinted As Integer = 0
+                For i = 0 To n - 1
+                    Dim cmbE0 As String = pc(i).Replace("(C)", "").Replace("(T)", "")
+                    Dim e0 As Integer = EIdx(fnm(i))
+                    If pr(i) > 0.0001 OrElse mn(i) > 0.0001 OrElse pmm(i) < 0.02 OrElse M.Elements(e0).UnbracedLTB <= 0 Then Continue For
+                    Dim cmb0 = M.Combos.FirstOrDefault(Function(c) c.Name = cmbE0)
+                    If cmb0 Is Nothing OrElse cmb0.RSTerms.Count > 0 OrElse cmb0.Nonlinear Then Continue For
+                    If M.Elements(e0).UnbracedLTB >= femS.ClearLength(M.Elements(e0)) - 0.0001 Then Continue For
+                    Console.WriteLine("  CB " & femS.CbDiagnostic(Res, e0, cmb0, pmm(i), M.Prefs))
+                    nPrinted += 1
+                    If nPrinted > 40 Then Exit For
+                Next
+            End If
+            If Environment.GetEnvironmentVariable("FEM_STATS") = "1" Then
+                Dim nCol As Integer = 0, nBm As Integer = 0, lowCol As Integer = 0, lowBm As Integer = 0, hiCol As Integer = 0, hiBm As Integer = 0
+                For i = 0 To n - 1
+                    If pmm(i) < 0.001 Then Continue For
+                    Dim e1 As Integer = EIdx(fnm(i))
+                    Dim relv As Double = (Fem(e1).PMM - pmm(i)) / pmm(i)
+                    If Math.Abs(relv) <= 0.02 Then Continue For
+                    Dim isCol As Boolean = Math.Abs(M.Elements(e1).Axes(0, 2)) > 0.9
+                    If isCol Then nCol += 1 Else nBm += 1
+                    If relv < 0 Then
+                        If isCol Then lowCol += 1 Else lowBm += 1
+                    Else
+                        If isCol Then hiCol += 1 Else hiBm += 1
+                    End If
+                Next
+                Console.WriteLine("  >2% differences: columns " & nCol & " (FEM lower " & lowCol & ", higher " & hiCol & "), beams " & nBm & " (FEM lower " & lowBm & ", higher " & hiBm & ")")
+            End If
+            Dim sortedRel = Rows.Select(Function(x) x.Item1).OrderBy(Function(x) x).ToList()
+            If sortedRel.Count > 0 Then Console.WriteLine("PMM error percentiles: 50% " & (sortedRel(sortedRel.Count \ 2) * 100).ToString("0.00") & "%, 95% " & (sortedRel(CInt(sortedRel.Count * 0.95) - 1) * 100).ToString("0.00") & "%, members above 2%: " & sortedRel.Where(Function(x) x > 0.02).Count() & ", above 5%: " & sortedRel.Where(Function(x) x > 0.05).Count())
             Console.WriteLine("compared members: " & cnt & ", mean |relative PMM error| " & (sumRel / Math.Max(cnt, 1) * 100).ToString("0.00") & "%, max " & (maxRel * 100).ToString("0.00") & "% (frame " & worst & ")")
             Dim vs As Double = 0, vc As Integer = 0, vm As Double = 0
+            Dim VRows As New List(Of Tuple(Of Double, String))
             For i = 0 To n - 1
                 If vj(i) < 0.001 Then Continue For
                 Dim f = Fem(EIdx(fnm(i)))
                 Dim rr As Double = Math.Abs(f.VMaj - vj(i)) / vj(i)
                 vs += rr : vc += 1 : vm = Math.Max(vm, rr)
+                VRows.Add(Tuple.Create(rr, fnm(i) & " " & ds(i) & " ETABS " & vj(i).ToString("0.0000") & " (" & vjc(i) & ") FEM " & f.VMaj.ToString("0.0000") & " (" & f.VMajCombo & ")  Vmin ETABS " & vn(i).ToString("0.0000") & " FEM " & f.VMin.ToString("0.0000")))
             Next
+            For Each vr In VRows.OrderByDescending(Function(x) x.Item1).Take(8) : Console.WriteLine("  shear mismatch: " & vr.Item2) : Next
             Console.WriteLine("shear Vmaj (all members, static combos only in FEM): mean |rel error| " & (vs / Math.Max(vc, 1) * 100).ToString("0.00") & "%, max " & (vm * 100).ToString("0.00") & "%")
         Finally
             StopEtabs()
@@ -606,6 +672,20 @@ Public Module Program
                 Sap.LoadCases.StaticLinear.SetCase(cn)
                 Sap.LoadCases.StaticLinear.SetLoads(cn, 1, New String() {"Load"}, New String() {pn}, New Double() {1.0})
             Next
+            If Environment.GetEnvironmentVariable("FEM_FIXSECT") = "1" Then
+                Console.WriteLine("design for the auto select lists: " & Sap.Analyze.RunAnalysis() & " " & Sap.DesignSteel.StartDesign())
+                Dim nF As Integer, frs() As String = Nothing, ch As Integer = 0
+                Sap.FrameObj.GetNameList(nF, frs)
+                Sap.SetModelIsLocked(False)
+                For Each fx1 In frs
+                    Dim dsn As String = "", cur As String = "", sa As String = ""
+                    Sap.DesignSteel.GetDesignSection(fx1, dsn)
+                    Sap.FrameObj.GetSection(fx1, cur, sa)
+                    If dsn <> "" AndAlso dsn <> cur Then Sap.FrameObj.SetSection(fx1, dsn) : ch += 1
+                Next
+                Console.WriteLine("design sections assigned to " & ch & " frames")
+                rndS = "x"
+            End If
             If Not String.IsNullOrEmpty(rndS) Then Console.WriteLine("analysis before reading (end offsets follow the new sections): " & Sap.Analyze.RunAnalysis())
             Dim rd As New EtabsReader(Sap)
             Dim sw = Stopwatch.StartNew()

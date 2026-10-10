@@ -87,6 +87,7 @@ Public Class FemCombo
     Public Name As String
     Public Terms As New List(Of FemTerm)
     Public RSTerms As New List(Of FemTerm)         'response spectrum cases (results are magnitudes)
+    Public Nonlinear As Boolean                    'refers to a nonlinear (P-Delta) static case: needs its own iterative solution
 End Class
 
 Public Class FemModel

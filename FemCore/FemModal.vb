@@ -332,6 +332,7 @@ Partial Public Class FemStatic
             Dim dk1 As Integer = dk
             R.DiaphragmForce(dk) = Combine(Function(k) DiaF(k)(dk1))
         Next
+        R.ModalFace = Fn : R.Rho = rho
         R.FaceForce = New Double(ne - 1)() {}
         For ei = 0 To ne - 1
             R.FaceForce(ei) = New Double(11) {}
@@ -361,11 +362,14 @@ Partial Public Class FemStatic
             P.NodalLoads.Add(nl)
             Tmp.Patterns.Add(P)
         Next
-        Dim Res = New FemStatic(Tmp).Solve()
+        Dim sol As New FemStatic(Tmp)
+        If MassGeometric Then sol.MassGeometric = True : sol.GeomW = GeomW
+        Dim Res = sol.Solve()
         Dim ndof As Integer = M.Nodes.Count * 6
         Dim dU(ndof - 1) As Double, dR(ndof - 1) As Double
         Dim dF(M.Elements.Count - 1)() As Double
         For e = 0 To M.Elements.Count - 1 : dF(e) = New Double(11) {} : Next
+        R.TorsionFace = dF
         For k = 0 To nd - 1
             Dim xs = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.X)
             Dim ys = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.Y)
@@ -389,5 +393,8 @@ Public Class RSResults
     Public Reaction() As Double
     Public BaseForce(2) As Double           'CQC of the total base forces FX, FY, FZ
     Public DiaphragmForce() As Double       'CQC of the inertial force of every diaphragm in the case direction
+    Public ModalFace()()() As Double        '[mode][element](12) face forces of every mode
+    Public Rho(,) As Double                 'CQC correlation matrix
+    Public TorsionFace()() As Double        '[element](12) signed face forces of the accidental torsion (added by absolute value)
     Public FaceForce()() As Double          '[element](12): combined magnitudes at the faces, local axes
 End Class

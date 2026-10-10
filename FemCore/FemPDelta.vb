@@ -5,6 +5,7 @@ Partial Public Class FemStatic
     'W_k u_k / z_k): every joint with lateral mass gets the geometric term  -m g / z  on its two lateral translations (z: elevation
     'above the base); the member stiffness itself carries no geometric part. Applies to all following linear cases and the modal case.
     Public MassGeometric As Boolean
+    Public LastIterSolver As FemStatic
     Private GeomW() As Double
 
     Public Sub UseMassPDelta()
@@ -42,8 +43,12 @@ Partial Public Class FemStatic
         Tmp.Patterns.Add(M.CombinePatterns(Terms, "COMBO"))
         Dim N() As Double = Nothing
         Dim Last As StaticResults = Nothing
+        Dim oldElastic As Boolean = ElasticForces
+        ElasticForces = False           'nonlinear static P-Delta (ETABS): member forces and reactions are the forces of the deformed equilibrium state (K + Kg)
+        Try
         For it = 1 To MaxIter
             Dim S As New FemStatic(Tmp) With {.AxialForces = N}
+            LastIterSolver = S
             Dim R = S.Solve()
             If R.Failed Then Return R
             Dim change As Double = 0, scale As Double = 1.0E-30
@@ -57,7 +62,30 @@ Partial Public Class FemStatic
             N = R.Axial(0)
             If it > 1 AndAlso change / scale < Tol Then Exit For
         Next
+        Finally
+            ElasticForces = oldElastic
+        End Try
         Return Last
+    End Function
+
+
+    'Steel design of the combinations that refer to nonlinear (P-Delta) static cases: each has its own iterative solution
+    Public Function DesignNonlinear(ByVal Combos As List(Of FemCombo), ByVal Prefs As DesignPrefs, ByVal Cur() As MemberRatios) As MemberRatios()
+        For Each cmb In Combos.Where(Function(c) c.Nonlinear)
+            Dim R = SolveIterative(cmb.Terms)
+            If R.Failed Then Continue For
+            Dim solver = LastIterSolver
+            Dim sglCombo As New FemCombo With {.Name = cmb.Name}
+            sglCombo.Terms.Add(New FemTerm With {.Name = "COMBO", .Factor = 1.0})
+            For ei = 0 To M.Elements.Count - 1
+                Dim r1 = solver.DesignElement(R, ei, New List(Of FemCombo) From {sglCombo}, Prefs)
+                Dim c0 = Cur(ei)
+                If r1.PMM > c0.PMM Then c0.PMM = r1.PMM : c0.P = r1.P : c0.MMaj = r1.MMaj : c0.MMin = r1.MMin : c0.PMMCombo = cmb.Name : c0.PMMStation = r1.PMMStation
+                If r1.VMaj > c0.VMaj Then c0.VMaj = r1.VMaj : c0.VMajCombo = cmb.Name
+                c0.VMin = Math.Max(c0.VMin, r1.VMin)
+            Next
+        Next
+        Return Cur
     End Function
 
 End Class
