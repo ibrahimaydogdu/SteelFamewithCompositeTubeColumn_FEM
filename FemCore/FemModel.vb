@@ -20,6 +20,8 @@ Public Class FemSection
     Public UnitMass As Double                   'kN s2/m4 (mass density)
     Public Depth, Width, FlangeThickness, WebThickness As Double    'm (I sections; design checks)
     Public Fy, Fu As Double                     'kN/m2
+    Public S22, S33, Z22, Z33, R22, R33 As Double       'elastic and plastic moduli, radii of gyration
+    Public Fillet As Double                     'fillet radius (k = tf + r)
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'property modifiers: area, As2, As3, torsion, I22, I33, mass, weight
     Public ReadOnly Property WeightPerLength As Double
         Get
@@ -38,6 +40,7 @@ Public Class FemElement
     Public OffsetI, OffsetJ As Double           'end length offsets
     Public RigidZone As Double                  'rigid zone factor (fraction of the offsets that is rigid)
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'object property modifiers (same order as the section modifiers)
+    Public UnbracedMajor, UnbracedMinor, UnbracedLTB As Double      'design unbraced lengths [m] (0: clear length)
     Public Ecc2, Ecc3 As Double                 'joint -> centroid offset in local axes 2 and 3 (cardinal point), rigid
     Public Group As String
     Public Story As Integer
@@ -83,6 +86,7 @@ End Class
 Public Class FemCombo
     Public Name As String
     Public Terms As New List(Of FemTerm)
+    Public RSTerms As New List(Of FemTerm)         'response spectrum cases (results are magnitudes)
 End Class
 
 Public Class FemModel
@@ -96,6 +100,8 @@ Public Class FemModel
     Public Spectra As New List(Of FemSpectrum)
     Public RSCases As New List(Of FemRSCase)
     Public ModalName As String
+    Public DesignCombos As New List(Of String)
+    Public Prefs As New DesignPrefs
     Public NonlinearCases As New List(Of String)     'static cases that ETABS solves as nonlinear (P-Delta when set)
     Public ModalCount As Integer
     Public AxialFactor As Double = 1.0           'stiffness reduction of the Direct Analysis Method applied by ETABS after a design run: EA

@@ -84,3 +84,10 @@ Süre: P4 0,5 s; 525M 8,7 s (yoğun matrislerle; birleştirme aşamasında hızl
 - **Süre (henüz hızlandırılmadı):** 525M'de bir P-Δ'lı durumun yinelemesi 15–22 s (her yinelemede matris yeniden kuruluyor, yoğun Cholesky). Entegrasyon aşamasında eleman matrislerinin önbelleğe alınması ve bantlı çözücü ile saniyenin altına indirilecek.
 
 **Sonraki:** F4 AISC 360-22 çelik tasarım (D/C oranı doğrulaması); AISC 341; optimizasyon entegrasyonu ve ETABS ile final doğrulama.
+
+### F3 düzeltmesi: kütle tabanlı P-Δ'nın gerçek biçimi (2026-10-10)
+Rastgele kesitli (hafif, esnek) P4 modeliyle yapılan karşılaştırma, eleman geometrik rijitliğiyle modellenen kütle tabanlı P-Δ'nın %1–3 yerdeğiştirme hatası verdiğini gösterdi. ETABS'in `~...` merkez noktalarında rapor ettiği "mesnet tepkileri" incelendi: değerler **W_k · u_k / z_k** ile birebir eşleşti (W_k: kat ağırlığı, u_k: kat yerdeğiştirmesi, z_k: kotun tabandan yüksekliği). Yani ETABS'in "Non-iterative Based on Mass" seçeneği:
+- elemanlara geometrik rijitlik eklemez; her **kütleli düğümün iki yanal ötelemesine −m·g/z** terimi eklenir (z: tabandan kot); bu terim bütün doğrusal durumlara (statik, modal, tepki spektrumu) uygulanır;
+- eleman uç kuvvetleri ve mesnet tepkileri bu terim olmadan elastik rijitlikten hesaplanır; P-Δ kuvvetleri tepki olarak diyafram merkez noktalarında görünür (bu noktalar gerçek mesnet değildir, karşılaştırmaya alınmaz).
+
+Bu biçimle sonuçlar: P4 statik (varsayılan ve rastgele kesitler): yerdeğiştirme, dönme ve **bütün eleman uç kuvvetleri %0,000**; modal periyot hatası 0,0000 % (burulma modları −0,016 %); RSX/RSY yerdeğiştirme %0,10–0,12, kuvvetler ≤ %0,2–0,5. Önceki eleman-geometrik-rijitlik yaklaşımı yalnızca P-Δ'lı **doğrusal olmayan statik durumlar** için (525M) kullanılır (yukarıdaki tablo).

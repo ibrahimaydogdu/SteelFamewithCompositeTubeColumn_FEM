@@ -60,6 +60,8 @@
     <Compile Include="FemStatic.vb" />
     <Compile Include="FemModal.vb" />
     <Compile Include="FemPDelta.vb" />
+    <Compile Include="FemDesign.vb" />
+    <Compile Include="FemDesignDriver.vb" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
 </Project>

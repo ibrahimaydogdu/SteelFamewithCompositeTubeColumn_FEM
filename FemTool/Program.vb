@@ -23,6 +23,10 @@ Public Module Program
             End If
             If args(0) = "selftest" Then
                 SelfTest()
+            ElseIf args(0) = "designcmp" Then
+                DesignCompare(args(1))
+            ElseIf args(0) = "design" Then
+                DesignDump(args(1))
             ElseIf args(0) = "rs" Then
                 RsCompare(args(1))
             ElseIf args(0) = "modal" Then
@@ -317,6 +321,146 @@ Public Module Program
         Next
     End Sub
 
+    '_______________________________________________________________________________________________
+    'ETABS steel design results per frame (to be reproduced by the FEM design checks)
+    Private Sub DesignDump(ByVal File As String)
+        StartEtabs()
+        Try
+            Console.WriteLine("open " & Sap.File.OpenFile(File))
+            Sap.SetPresentUnits(eUnits.kN_m_C)
+            NoPDelta()
+            Console.WriteLine("analysis " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign())
+            Dim nc As Integer, cn() As String = Nothing
+            Sap.DesignSteel.GetComboStrength(nc, cn)
+            Console.WriteLine("strength combos (" & nc & "): " & String.Join(", ", cn.Take(8)) & " ...")
+            Dim n As Integer, fnm() As String = Nothing, ft() As eFrameDesignOrientation = Nothing, ds() As String = Nothing, stt() As String = Nothing, pc() As String = Nothing
+            Dim pmm() As Double = Nothing, pr() As Double = Nothing, mj() As Double = Nothing, mn() As Double = Nothing, vjc() As String = Nothing, vj() As Double = Nothing, vnc() As String = Nothing, vn() As Double = Nothing
+            Console.WriteLine("summary3 ret " & Sap.DesignSteel.GetSummaryResults_3("All", n, fnm, ft, ds, stt, pc, pmm, pr, mj, mn, vjc, vj, vnc, vn, eItemType.Group))
+            Dim n2 As Integer, f2() As String = Nothing, rt() As Double = Nothing, rtype() As Integer = Nothing, loc() As Double = Nothing, cb() As String = Nothing, es() As String = Nothing, ws() As String = Nothing
+            Sap.DesignSteel.GetSummaryResults("All", n2, f2, rt, rtype, loc, cb, es, ws, eItemType.Group)
+            Dim Idx2 As New Dictionary(Of String, Integer)
+            For i = 0 To n2 - 1 : Idx2(f2(i)) = i : Next
+            'frame lengths and stations
+            Dim M = New EtabsReader(Sap).Read()
+            Sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+            Console.WriteLine("frame  section       orient  PMMratio  P     Mmaj   Mmin   Vmaj   Vmin   | ratio type loc(m)  combo")
+            For i = 0 To Math.Min(n, 40) - 1
+                Dim k As Integer = Idx2(fnm(i))
+                Console.WriteLine(fnm(i).PadRight(6) & ds(i).PadRight(13) & ft(i).ToString().Substring(0, 3).PadRight(7) & pmm(i).ToString("0.0000").PadLeft(9) & pr(i).ToString("0.0000").PadLeft(8) & mj(i).ToString("0.0000").PadLeft(8) & mn(i).ToString("0.0000").PadLeft(8) & vj(i).ToString("0.0000").PadLeft(8) & vn(i).ToString("0.0000").PadLeft(8) & "  | " & rt(k).ToString("0.0000") & " " & rtype(k) & " " & loc(k).ToString("0.000") & " " & cb(k) & "   pmm combo " & pc(i))
+            Next
+            Sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+            Sap.Results.Setup.SetComboSelectedForOutput("C1", True)
+            Dim nf As Integer, FO() As String = Nothing, FSta() As Double = Nothing, FE() As String = Nothing, FES() As Double = Nothing, FLC() As String = Nothing, FST() As String = Nothing, FSN() As Double = Nothing
+            Dim P() As Double = Nothing, V2() As Double = Nothing, V3() As Double = Nothing, Tor() As Double = Nothing, Mo2() As Double = Nothing, Mo3() As Double = Nothing
+            Sap.Results.FrameForce("All", eItemTypeElm.GroupElm, nf, FO, FSta, FE, FES, FLC, FST, FSN, P, V2, V3, Tor, Mo2, Mo3)
+            For Each fnn In {"5", "37", "73", "10"}
+                Dim st = Enumerable.Range(0, nf).Where(Function(k) FO(k) = fnn).Select(Function(k) FSta(k).ToString("0.000")).ToList()
+                Console.WriteLine("  stations of frame " & fnn & " (" & st.Count & "): " & String.Join(" ", st))
+            Next
+            Console.WriteLine("max PMM " & pmm.Max().ToString("0.0000") & ", max Vmaj " & vj.Max().ToString("0.0000"))
+        Finally
+            StopEtabs()
+        End Try
+    End Sub
+
+    '_______________________________________________________________________________________________
+    'FEM steel design ratios against ETABS (members whose governing combination has no response spectrum case)
+    Private Sub DesignCompare(ByVal File As String)
+        StartEtabs()
+        Try
+            Console.WriteLine("open " & Sap.File.OpenFile(File))
+            Sap.SetPresentUnits(eUnits.kN_m_C)
+            NoPDelta()
+            Dim rnd As String = Environment.GetEnvironmentVariable("FEM_RANDOMSECT")
+            If Not String.IsNullOrEmpty(rnd) Then RandomSections(Integer.Parse(rnd))
+            Console.WriteLine("analysis " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign())
+            Console.WriteLine("second analysis (DAM state): " & Sap.SetModelIsLocked(False) & " " & Sap.Analyze.RunAnalysis() & ", design " & Sap.DesignSteel.StartDesign())
+            Dim n As Integer, fnm() As String = Nothing, ft() As eFrameDesignOrientation = Nothing, ds() As String = Nothing, stt() As String = Nothing, pc() As String = Nothing
+            Dim pmm() As Double = Nothing, pr() As Double = Nothing, mj() As Double = Nothing, mn() As Double = Nothing, vjc() As String = Nothing, vj() As Double = Nothing, vnc() As String = Nothing, vn() As Double = Nothing
+            Sap.DesignSteel.GetSummaryResults_3("All", n, fnm, ft, ds, stt, pc, pmm, pr, mj, mn, vjc, vj, vnc, vn, eItemType.Group)
+            Dim M = New EtabsReader(Sap).Read()
+            If M.Prefs.DirectAnalysis Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
+            Dim femS As New FemStatic(M)
+            If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" Then femS.UseMassPDelta()
+            Dim Res = femS.Solve()
+            Dim Static1 = M.Combos.Where(Function(c) M.DesignCombos.Contains(c.Name) AndAlso c.RSTerms.Count = 0).ToList()
+            Console.WriteLine("design combos " & M.DesignCombos.Count & ", static-only " & Static1.Count & "; DCLimit " & M.Prefs.DCLimit)
+            Dim sw = Stopwatch.StartNew()
+            Dim trc As String = Environment.GetEnvironmentVariable("FEM_TRACE")
+            If Not String.IsNullOrEmpty(trc) Then femS.TraceElement = M.Elements.FindIndex(Function(el) el.Name = trc) : Console.WriteLine("trace of frame " & trc & " (section " & M.Elements(femS.TraceElement).Section.Name & ")")
+            Dim trcCombo As String = Environment.GetEnvironmentVariable("FEM_TRACECOMBO")
+            If Not String.IsNullOrEmpty(trcCombo) Then
+                Dim cc = M.Combos.FirstOrDefault(Function(c) c.Name = trcCombo)
+                If cc IsNot Nothing Then Console.WriteLine("  FEM combo " & trcCombo & ": " & String.Join(" + ", cc.Terms.Select(Function(x) x.Factor.ToString("0.###") & "*" & x.Name)) & " | RS: " & String.Join(" + ", cc.RSTerms.Select(Function(x) x.Factor.ToString("0.###") & "*" & x.Name)))
+                Dim ni As Integer, tp() As eCNameType = Nothing, cname() As String = Nothing, sfc() As Double = Nothing
+                Sap.RespCombo.GetCaseList(trcCombo, ni, tp, cname, sfc)
+                Console.WriteLine("  ETABS combo " & trcCombo & ": " & String.Join(" + ", Enumerable.Range(0, ni).Select(Function(k) sfc(k).ToString("0.###") & "*" & cname(k))))
+            End If
+            If Not String.IsNullOrEmpty(trc) AndAlso Not String.IsNullOrEmpty(trcCombo) Then
+                Sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+                Sap.Results.Setup.SetComboSelectedForOutput(trcCombo, True)
+                Dim nf As Integer, FO() As String = Nothing, FSta() As Double = Nothing, FE() As String = Nothing, FES() As Double = Nothing, FLC() As String = Nothing, FST() As String = Nothing, FSN() As Double = Nothing
+                Dim P() As Double = Nothing, V2() As Double = Nothing, V3() As Double = Nothing, Tor() As Double = Nothing, Mo2() As Double = Nothing, Mo3() As Double = Nothing
+                Sap.Results.FrameForce(trc, eItemTypeElm.ObjectElm, nf, FO, FSta, FE, FES, FLC, FST, FSN, P, V2, V3, Tor, Mo2, Mo3)
+                For k = 0 To nf - 1
+                    Console.WriteLine("  ETABS " & FLC(k) & " " & FST(k) & " sta " & FSta(k).ToString("0.000") & " P " & P(k).ToString("0.00") & " V2 " & V2(k).ToString("0.00") & " V3 " & V3(k).ToString("0.00") & " M2 " & Mo2(k).ToString("0.00") & " M3 " & Mo3(k).ToString("0.00"))
+                Next
+            End If
+            Dim Fem = femS.DesignMembers(Res, Static1, M.Prefs)
+            Console.WriteLine("FEM design of " & M.Elements.Count & " members: " & sw.ElapsedMilliseconds & " ms")
+            Dim EIdx As New Dictionary(Of String, Integer)
+            For i = 0 To M.Elements.Count - 1 : EIdx(M.Elements(i).Name) = i : Next
+            Dim staticNames As New HashSet(Of String)(Static1.Select(Function(c) c.Name))
+            Console.WriteLine("frame  section       ETABS PMM  FEM PMM   P e/f     Mmaj e/f      Mmin e/f      Vmaj e/f      Vmin e/f     ETABS combo / FEM combo")
+            Dim cnt As Integer = 0, sumRel As Double = 0, maxRel As Double = 0, worst As String = ""
+            For i = 0 To n - 1
+                Dim cmbE As String = pc(i).Replace("(C)", "").Replace("(T)", "")
+                If Not staticNames.Contains(cmbE) Then Continue For
+                Dim e As Integer = EIdx(fnm(i))
+                Dim f = Fem(e)
+                If pmm(i) < 0.001 Then Continue For
+                Dim rel As Double = (f.PMM - pmm(i)) / pmm(i)
+                cnt += 1 : sumRel += Math.Abs(rel)
+                If Math.Abs(rel) > maxRel Then maxRel = Math.Abs(rel) : worst = fnm(i)
+                If cnt <= 60 Then Console.WriteLine(fnm(i).PadRight(6) & ds(i).PadRight(13) & pmm(i).ToString("0.0000").PadLeft(9) & f.PMM.ToString("0.0000").PadLeft(10) & "  " & pr(i).ToString("0.000") & "/" & f.P.ToString("0.000") & "  " & mj(i).ToString("0.000") & "/" & f.MMaj.ToString("0.000") & "  " & mn(i).ToString("0.000") & "/" & f.MMin.ToString("0.000") & "  " & vj(i).ToString("0.000") & "/" & f.VMaj.ToString("0.000") & "  " & vn(i).ToString("0.000") & "/" & f.VMin.ToString("0.000") & "   " & cmbE & " / " & f.PMMCombo)
+            Next
+            Console.WriteLine("compared members: " & cnt & ", mean |relative PMM error| " & (sumRel / Math.Max(cnt, 1) * 100).ToString("0.00") & "%, max " & (maxRel * 100).ToString("0.00") & "% (frame " & worst & ")")
+            Dim vs As Double = 0, vc As Integer = 0, vm As Double = 0
+            For i = 0 To n - 1
+                If vj(i) < 0.001 Then Continue For
+                Dim f = Fem(EIdx(fnm(i)))
+                Dim rr As Double = Math.Abs(f.VMaj - vj(i)) / vj(i)
+                vs += rr : vc += 1 : vm = Math.Max(vm, rr)
+            Next
+            Console.WriteLine("shear Vmaj (all members, static combos only in FEM): mean |rel error| " & (vs / Math.Max(vc, 1) * 100).ToString("0.00") & "%, max " & (vm * 100).ToString("0.00") & "%")
+        Finally
+            StopEtabs()
+        End Try
+    End Sub
+
+    'random sections for the design groups (frames of a group get the same section) from the sections defined in the model
+    Private Sub RandomSections(ByVal Seed As Integer)
+        Dim rnd As New Random(Seed)
+        Dim nS As Integer, sn() As String = Nothing
+        Sap.PropFrame.GetNameList(nS, sn, eFramePropType.I)
+        Dim names = sn.Where(Function(x) x.StartsWith("W")).ToList()
+        Dim n As Integer, fr() As String = Nothing
+        Sap.FrameObj.GetNameList(n, fr)
+        Dim Pick As New Dictionary(Of String, String)
+        For Each f In fr
+            Dim ng As Integer, gn() As String = Nothing
+            Sap.FrameObj.GetGroupAssign(f, ng, gn)
+            Dim g As String = String.Join("/", gn.Where(Function(x) x <> "All"))
+            If Not Pick.ContainsKey(g) Then
+                Dim isCol As Boolean = g.StartsWith("COL")
+                Dim pool = names.Where(Function(x) If(isCol, (x.StartsWith("W310") OrElse x.StartsWith("W360")), True)).ToList()
+                Pick(g) = pool(rnd.Next(pool.Count))
+            End If
+            Sap.FrameObj.SetSection(f, Pick(g))
+        Next
+        Console.WriteLine("random sections: " & String.Join(", ", Pick.Select(Function(kv) kv.Key & "=" & kv.Value)))
+    End Sub
+
     Private Sub NoPDelta()
         Dim PVer, PNR As Integer, PFs() As String = Nothing, PDt() As String = Nothing
         If Sap.DatabaseTables.GetTableForEditingArray("P-Delta Option Definition", "", PVer, PFs, PNR, PDt) = 0 AndAlso PNR > 0 Then
@@ -396,6 +540,8 @@ Public Module Program
         Return Math.Abs(v - r) / Math.Max(scale, 1.0E-9)
     End Function
 
+    Private ScanFlag As Boolean
+
     Private Sub StaticCompare(ByVal File As String, ByVal CaseList As String)
         StartEtabs()
         Try
@@ -449,6 +595,8 @@ Public Module Program
                 Next
                 Console.WriteLine("end offsets experiment: " & off)
             End If
+            Dim rndS As String = Environment.GetEnvironmentVariable("FEM_RANDOMSECT")
+            If Not String.IsNullOrEmpty(rndS) Then RandomSections(Integer.Parse(rndS))
             'one linear static case per load pattern (FEM_<pattern>) so that the single patterns can be compared
             Dim nPat As Integer, patNames() As String = Nothing
             Sap.LoadPatterns.GetNameList(nPat, patNames)
@@ -458,6 +606,7 @@ Public Module Program
                 Sap.LoadCases.StaticLinear.SetCase(cn)
                 Sap.LoadCases.StaticLinear.SetLoads(cn, 1, New String() {"Load"}, New String() {pn}, New Double() {1.0})
             Next
+            If Not String.IsNullOrEmpty(rndS) Then Console.WriteLine("analysis before reading (end offsets follow the new sections): " & Sap.Analyze.RunAnalysis())
             Dim rd As New EtabsReader(Sap)
             Dim sw = Stopwatch.StartNew()
             Dim M = rd.Read()
@@ -502,9 +651,13 @@ Public Module Program
             Console.WriteLine("ETABS analysis: " & Sap.Analyze.RunAnalysis())
             sw.Restart()
             If Environment.GetEnvironmentVariable("FEM_NOTORS") = "1" Then GeometricTorsion = False
+            If Environment.GetEnvironmentVariable("FEM_CLEARG") = "1" Then GeometricClearOnly = True
+            If Environment.GetEnvironmentVariable("FEM_JOINTG") = "1" Then GeometricJointLumped = True
+            If Environment.GetEnvironmentVariable("FEM_GFORCES") = "1" Then ElasticForces = False
             If Environment.GetEnvironmentVariable("FEM_LUMPEDG") = "1" Then GeometricLumped = True
             Dim femS As New FemStatic(M)
             If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" AndAlso Environment.GetEnvironmentVariable("FEM_NOPD") <> "1" Then femS.UseMassPDelta() : Console.WriteLine("mass-based P-Delta axial forces applied in the FEM")
+            If Environment.GetEnvironmentVariable("FEM_SCAN") = "1" Then ScanFlag = True
             Dim Res = femS.Solve()
             Console.WriteLine("FEM solution " & sw.Elapsed.TotalMilliseconds.ToString("0") & " ms (including assembly), free DOF " & New FemStatic(M).NFree & If(Res.Failed, " FAILED: " & Res.Message, ""))
             If Res.Failed Then Return
@@ -595,6 +748,16 @@ Public Module Program
                     If Not Att(i \ 6) Then Continue For
                     If (i Mod 6) < 3 Then eT = Math.Max(eT, Rel(U(i), Dsp(c)(i), scT)) Else eR = Math.Max(eR, Rel(U(i), Dsp(c)(i), scR))
                 Next
+                If Environment.GetEnvironmentVariable("FEM_REACT") = "1" Then
+                    Console.WriteLine("    largest reaction differences " & c & ":")
+                    For Each i In Enumerable.Range(0, nd).OrderByDescending(Function(k) Math.Abs(Rea(c)(k) - Rx(k))).Take(6)
+                        Console.WriteLine("      node " & M.Nodes(i \ 6).Name & " dof " & (i Mod 6) & ": ETABS " & Rea(c)(i).ToString("0.0000") & " FEM " & Rx(i).ToString("0.0000"))
+                    Next
+                    Console.WriteLine("    reactions " & c & ": node dof  ETABS  FEM")
+                    For i = 0 To nd - 1
+                        If M.Nodes(i \ 6).Restraint(i Mod 6) AndAlso (Math.Abs(Rea(c)(i)) > 1.0E-6 OrElse Math.Abs(Rx(i)) > 1.0E-6) Then Console.WriteLine("      " & M.Nodes(i \ 6).Name.PadRight(4) & (i Mod 6) & " " & Rea(c)(i).ToString("0.0000").PadLeft(12) & Rx(i).ToString("0.0000").PadLeft(12))
+                    Next
+                End If
                 Dim sRe As Double = 0, eRe As Double = 0
                 For i = 0 To nd - 1 : sRe = Math.Max(sRe, Math.Abs(Rea(c)(i))) : Next
                 For i = 0 To nd - 1 : eRe = Math.Max(eRe, Rel(Rx(i), Rea(c)(i), If((i Mod 6) < 3, sRe, sRe))) : Next
@@ -665,11 +828,55 @@ Public Module Program
             Console.WriteLine("  columns: joint-to-joint " & wc.ToString("0.00") & ", clear " & wcc.ToString("0.00") & "; beams: joint-to-joint " & wb.ToString("0.00") & ", clear " & wbc.ToString("0.00"))
             Console.WriteLine("  weight joint-to-joint " & wFull.ToString("0.00") & " kN, clear length " & wClear.ToString("0.00") & " kN")
             Console.WriteLine("worst displacement error " & (WorstAll * 100).ToString("0.000") & "%")
+            If Environment.GetEnvironmentVariable("FEM_STORYPD") = "1" Then StoryPDelta(M, femS, Wanted(0), Dsp, Rea)
             'a detailed look at the first case
             DetailForFirst(M, Res, Wanted, Dsp, Rea)
         Finally
             StopEtabs()
         End Try
+    End Sub
+
+    'story-based P-Delta forces from ETABS displacements against the reactions ETABS reports at the diaphragm centre points
+    Private Sub StoryPDelta(ByVal M As FemModel, ByVal femS As FemStatic, ByVal c As String, ByVal Dsp As Dictionary(Of String, Double()), ByVal Rea As Dictionary(Of String, Double()))
+        Dim dir As Integer = Integer.Parse(Environment.GetEnvironmentVariable("FEM_STORYDIR"))
+        Dim nd As Integer = M.DiaphragmCount
+        Dim Att(M.Nodes.Count - 1) As Boolean
+        For Each el In M.Elements : Att(el.NI) = True : Att(el.NJ) = True : Next
+        Dim z(nd - 1) As Double, W(nd - 1) As Double, u(nd - 1) As Double, ReaD(nd - 1) As Double
+        For i = 0 To M.Nodes.Count - 1
+            Dim d = M.Nodes(i).Diaphragm
+            If d < 0 Then Continue For
+            z(d) = M.Nodes(i).Z
+            If Att(i) Then
+                W(d) += femS.NodalMass(i, 0) * FemStatic.GravityAccel
+                u(d) = Dsp(c)(i * 6 + dir)
+            Else
+                ReaD(d) = Rea(c)(i * 6 + dir)
+            End If
+        Next
+        Dim order = Enumerable.Range(0, nd).OrderBy(Function(k) z(k)).ToArray()
+        Console.WriteLine("  story P-Delta check, direction " & dir & ":  level z  weight  u  ETABS reaction at centre point")
+        For ii = 0 To nd - 1
+            Dim k = order(ii)
+            Console.WriteLine("    " & z(k).ToString("0.00").PadLeft(6) & W(k).ToString("0.0").PadLeft(10) & u(k).ToString("0.000000").PadLeft(12) & ReaD(k).ToString("0.0000").PadLeft(10))
+        Next
+        'story forces from P_story = sum of the weights at and above the level (columns below the level)
+        For ii = 0 To nd - 1
+            Dim k = order(ii)
+            Dim Pk As Double = 0
+            For jj = ii To nd - 1 : Pk += W(order(jj)) : Next
+            Dim hk As Double = z(k) - If(ii = 0, 0.0, z(order(ii - 1)))
+            Dim drift As Double = u(k) - If(ii = 0, 0.0, u(order(ii - 1)))
+            Dim F As Double = Pk * drift / hk
+            Dim Fnext As Double = 0
+            If ii < nd - 1 Then
+                Dim Pn As Double = 0
+                For jj = ii + 1 To nd - 1 : Pn += W(order(jj)) : Next
+                Dim hn As Double = z(order(ii + 1)) - z(k)
+                Fnext = Pn * (u(order(ii + 1)) - u(k)) / hn
+            End If
+            Console.WriteLine("    level z " & z(k).ToString("0.00") & ": P " & Pk.ToString("0.0") & " h " & hk.ToString("0.00") & " P*drift/h " & F.ToString("0.0000") & "  net story force " & (F - Fnext).ToString("0.0000") & "  (ETABS " & ReaD(k).ToString("0.0000") & ")")
+        Next
     End Sub
 
     Private Sub DetailForFirst(ByVal M As FemModel, ByVal Res As StaticResults, ByVal Wanted As List(Of String), ByVal Dsp As Dictionary(Of String, Double()), ByVal Rea As Dictionary(Of String, Double()))

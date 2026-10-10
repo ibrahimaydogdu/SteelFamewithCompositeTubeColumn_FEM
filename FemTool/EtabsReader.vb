@@ -31,8 +31,27 @@ Public Class EtabsReader
         Return M
     End Function
 
+    'Strength combinations of the steel design and the design preferences (phi factors, D/C limit)
+    Private Sub ReadDesignSettings()
+        Dim nc As Integer, cn() As String = Nothing
+        If Sap.DesignSteel.GetComboStrength(nc, cn) = 0 AndAlso cn IsNot Nothing Then M.DesignCombos.AddRange(cn)
+        Dim V, N As Integer, Fs() As String = Nothing, D() As String = Nothing
+        If Sap.DatabaseTables.GetTableForEditingArray("Steel Frame Design Preferences - AISC 360-22", "", V, Fs, N, D) = 0 AndAlso N > 0 Then
+            Dim Num = Function(f As String, def As Double) As Double
+                          Dim j As Integer = Array.IndexOf(Fs, f)
+                          Dim x As Double
+                          Return If(j >= 0 AndAlso Double.TryParse(D(j), NumberStyles.Float, CultureInfo.InvariantCulture, x), x, def)
+                      End Function
+            M.Prefs.PhiBend = Num("PhiBend", 0.9) : M.Prefs.PhiComp = Num("PhiComp", 0.9) : M.Prefs.PhiTY = Num("PhiTY", 0.9) : M.Prefs.PhiTF = Num("PhiTF", 0.75)
+            M.Prefs.PhiShear = Num("PhiShear", 0.9) : M.Prefs.DCLimit = Num("DCLimit", 0.95)
+            Dim jm As Integer = Array.IndexOf(Fs, "AnalMethod")
+            M.Prefs.DirectAnalysis = (jm >= 0 AndAlso D(jm) = "Direct Analysis")
+        End If
+    End Sub
+
     'Mass source (self mass, load patterns), response spectrum functions and cases, modal case
     Private Sub ReadMassAndSpectra()
+        ReadDesignSettings()
         Dim V, N As Integer, Fs() As String = Nothing, D() As String = Nothing
         If Sap.DatabaseTables.GetTableForEditingArray("Mass Source Definition", "", V, Fs, N, D) = 0 AndAlso N > 0 Then
             Dim Col = Function(row As Integer, f As String) As String
@@ -168,6 +187,10 @@ Public Class EtabsReader
                     End Select
                 End If
             End If
+            Dim ov As Double, pd As Boolean
+            If Sap.DesignSteel.AISC360_22.GetOverwrite(nm, 26, ov, pd) = 0 Then E.UnbracedMajor = ov * E.Length
+            If Sap.DesignSteel.AISC360_22.GetOverwrite(nm, 27, ov, pd) = 0 Then E.UnbracedMinor = ov * E.Length
+            If Sap.DesignSteel.AISC360_22.GetOverwrite(nm, 28, ov, pd) = 0 Then E.UnbracedLTB = ov * E.Length
             Dim ng As Integer, gn() As String = Nothing
             If Sap.FrameObj.GetGroupAssign(nm, ng, gn) = 0 Then E.Group = String.Join("/", gn.Where(Function(g) g <> "All"))
             M.Elements.Add(E)
@@ -187,6 +210,7 @@ Public Class EtabsReader
         Dim A, As2, As3, J, I22, I33, S22, S33, Z22, Z33, R22, R33 As Double
         Sap.PropFrame.GetSectProps(Name, A, As2, As3, J, I22, I33, S22, S33, Z22, Z33, R22, R33)
         S.A = A : S.As2 = As2 : S.As3 = As3 : S.J = J : S.I22 = I22 : S.I33 = I33
+        S.S22 = S22 : S.S33 = S33 : S.Z22 = Z22 : S.Z33 = Z33 : S.R22 = R22 : S.R33 = R33 : S.Fillet = fr
         Dim E, U, Al, G, Tmp As Double
         Sap.PropMaterial.GetMPIsotropic(mat, E, U, Al, G, Tmp)
         S.E = E : S.G = G
@@ -280,6 +304,10 @@ Public Class EtabsReader
             Dim ct As eLoadCaseType, st As Integer
             If Sap.LoadCases.GetTypeOAPI(nm, ct, st) <> 0 Then Continue For
             Dim nl As Integer, lt() As String = Nothing, ln() As String = Nothing, sf() As Double = Nothing
+            If ct = eLoadCaseType.ResponseSpectrum Then
+                Flat(nm) = New List(Of FemTerm) From {New FemTerm With {.Name = "@RS:" & nm, .Factor = 1.0}}
+                Continue For
+            End If
             If ct = eLoadCaseType.NonlinearStatic Then
                 If Sap.LoadCases.StaticNonlinear.GetLoads(nm, nl, lt, ln, sf) <> 0 Then Continue For
                 M.NonlinearCases.Add(nm)
@@ -321,8 +349,10 @@ Public Class EtabsReader
         For Each kv In Flat
             Dim C As New FemCombo With {.Name = kv.Key}
             For Each t In kv.Value
-                Dim ex = C.Terms.FirstOrDefault(Function(x) x.Name = t.Name)
-                If ex Is Nothing Then C.Terms.Add(New FemTerm With {.Name = t.Name, .Factor = t.Factor}) Else ex.Factor += t.Factor
+                Dim lst As List(Of FemTerm) = If(t.Name.StartsWith("@RS:"), C.RSTerms, C.Terms)
+                Dim nmT As String = If(t.Name.StartsWith("@RS:"), t.Name.Substring(4), t.Name)
+                Dim ex = lst.FirstOrDefault(Function(x) x.Name = nmT)
+                If ex Is Nothing Then lst.Add(New FemTerm With {.Name = nmT, .Factor = t.Factor}) Else ex.Factor += t.Factor
             Next
             M.Combos.Add(C)
         Next

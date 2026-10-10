@@ -14,7 +14,8 @@ End Class
 'the offset. The chain is condensed to a 12 x 12 matrix between the two joints (local axes). The results keep what is needed to
 'recover the forces at the faces of the clear span.
 Public Class ChainResult
-    Public K(11, 11) As Double                  'joint stiffness, local axes
+    Public K(11, 11) As Double                  'joint stiffness, local axes (with the geometric stiffness)
+    Public KEl As Double(,)                     'joint stiffness without the geometric stiffness (forces ETABS reports are elastic)
     Public Load As Double()()                   'per pattern: joint load vector (12)
     Public ClearK(,) As Double                  'clear span stiffness (releases condensed), 12 x 12
     Public ClearLoad As Double()()              'per pattern: condensed equivalent load of the clear span
@@ -29,6 +30,10 @@ Public Class ChainResult
 End Class
 
 Public Module FemChain
+
+    Public ElasticForces As Boolean = True               'member forces and reactions from the elastic stiffness only (as ETABS)
+    Public GeometricJointLumped As Boolean = False       'geometric stiffness P/L between the joints (full joint-to-joint length)
+    Public GeometricClearOnly As Boolean = False       'geometric stiffness only in the clear span (not in the flexible stubs of the offsets)
 
     Private Const Eps As Double = 0.000000001
 
@@ -85,7 +90,7 @@ Public Module FemChain
         Dim AddSegment = Sub(x0 As Double, x1 As Double, dofA() As Integer, dofB() As Integer, rel As List(Of Integer), isClear As Boolean)
                              Dim Ls As Double = x1 - x0
                              Dim ks = LocalStiffness(Sec, Ls)
-                             If Axial <> 0 Then
+                             If Axial <> 0 AndAlso Not GeometricJointLumped AndAlso (isClear OrElse Not GeometricClearOnly) Then
                                  Dim kgm = GeometricStiffness(Sec, Ls)
                                  For i = 0 To 11 : For j = 0 To 11 : ks(i, j) += Axial * kgm(i, j) : Next : Next
                              End If
@@ -177,6 +182,18 @@ Public Module FemChain
                 For m = 0 To 11 : s += Tr(m, i) * tmp(m, j) : Next
                 R.K(i, j) = s
             Next : Next
+        If Axial <> 0 AndAlso GeometricJointLumped Then
+            'P-Delta as a lumped geometric spring P/L between the two joints (story-based P-Delta)
+            For Each d In {1, 2}
+                R.K(d, d) += Axial / L : R.K(6 + d, 6 + d) += Axial / L : R.K(d, 6 + d) -= Axial / L : R.K(6 + d, d) -= Axial / L
+            Next
+        End If
+        If Axial <> 0 AndAlso ElasticForces Then
+            Dim el = Build(E, Loads, NPat, AxialFactor, FlexuralFactor, 0)
+            R.KEl = el.K : R.ClearK = el.ClearK
+        Else
+            R.KEl = R.K
+        End If
         R.Load = New Double(NPat - 1)() {}
         For p = 0 To NPat - 1
             Dim jl(11) As Double

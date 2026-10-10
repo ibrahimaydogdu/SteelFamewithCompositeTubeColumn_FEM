@@ -1,28 +1,38 @@
 'Second-order (P-Delta) solutions: the geometric stiffness of every member uses its axial force
 Partial Public Class FemStatic
 
-    'ETABS preset "Non-iterative Based on Mass": the axial forces of a gravity state (weight of the lumped masses, mass x g on every joint)
-    'give the geometric stiffness of all following linear cases
+    'ETABS preset "Non-iterative Based on Mass" (measured on P4: the reactions ETABS reports at the diaphragm centre points are exactly
+    'W_k u_k / z_k): every joint with lateral mass gets the geometric term  -m g / z  on its two lateral translations (z: elevation
+    'above the base); the member stiffness itself carries no geometric part. Applies to all following linear cases and the modal case.
+    Public MassGeometric As Boolean
+    Private GeomW() As Double
+
     Public Sub UseMassPDelta()
         ComputeMasses()
-        Dim Tmp As New FemModel With {.DiaphragmCount = M.DiaphragmCount, .AxialFactor = M.AxialFactor, .FlexuralFactor = M.FlexuralFactor}
-        Tmp.Nodes = M.Nodes : Tmp.Elements = M.Elements : Tmp.Sections = M.Sections
-        Dim P As New FemPattern With {.Name = "MASSG"}
+        Dim zBase As Double = 0
+        Dim restrained = M.Nodes.Where(Function(n) n.Restraint(0) AndAlso n.Restraint(1) AndAlso n.Restraint(2)).ToList()
+        If restrained.Count > 0 Then zBase = restrained.Min(Function(n) n.Z)
+        ReDim GeomW(M.Nodes.Count * 6 - 1)
         For i = 0 To M.Nodes.Count - 1
-            Dim m1 As Double = MassFull(i * 6)
-            If m1 = 0 Then Continue For
-            Dim nl As New FemNodalLoad With {.Node = i}
-            nl.F(2) = -m1 * GravityAccel
-            P.NodalLoads.Add(nl)
+            Dim z As Double = M.Nodes(i).Z - zBase
+            If z <= 0.000001 Then Continue For
+            For d = 0 To 1 : GeomW(i * 6 + d) = MassFull(i * 6 + d) * GravityAccel / z : Next
         Next
-        Tmp.Patterns.Add(P)
-        Dim Res = New FemStatic(Tmp).Solve()
-        AxialForces = Res.Axial(0)
-        Dim sc As String = Environment.GetEnvironmentVariable("FEM_PSCALE")
-        If Not String.IsNullOrEmpty(sc) Then
-            Dim f As Double = Double.Parse(sc, Globalization.CultureInfo.InvariantCulture)
-            For i = 0 To AxialForces.Length - 1 : AxialForces(i) *= f : Next
-        End If
+        MassGeometric = True
+        AxialForces = Nothing
+    End Sub
+
+    Friend Sub AddMassGeometric(ByVal K As Double(,))
+        If Not MassGeometric Then Return
+        For dof = 0 To M.Nodes.Count * 6 - 1
+            Dim w As Double = GeomW(dof)
+            If w = 0 OrElse MapIdx(dof).Length = 0 Then Continue For
+            For a = 0 To MapIdx(dof).Length - 1
+                For b = 0 To MapIdx(dof).Length - 1
+                    K(MapIdx(dof)(a), MapIdx(dof)(b)) -= MapCoef(dof)(a) * MapCoef(dof)(b) * w
+                Next
+            Next
+        Next
     End Sub
 
     'Nonlinear static case with geometric nonlinearity "P-Delta": iterates until the axial forces of the equilibrium state no longer change

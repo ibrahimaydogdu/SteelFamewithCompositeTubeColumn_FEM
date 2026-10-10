@@ -166,6 +166,7 @@ Partial Public Class FemStatic
                 Next
             Next
         Next
+        AddMassGeometric(K)
         'nodal loads
         For p = 0 To np - 1
             For Each nl In M.Patterns(p).NodalLoads
@@ -213,7 +214,7 @@ Partial Public Class FemStatic
                 Dim f(11) As Double
                 For i = 0 To 11
                     Dim s As Double = 0
-                    For j = 0 To 11 : s += Chains(ei).K(i, j) * ul(j) : Next
+                    For j = 0 To 11 : s += Chains(ei).KEl(i, j) * ul(j) : Next
                     f(i) = s - Chains(ei).Load(p)(i)
                 Next
                 R.EndForce(p)(ei) = f

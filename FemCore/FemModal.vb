@@ -73,6 +73,7 @@ Partial Public Class FemStatic
                 Next : Next
             AddToReduced(KRed, kg, dofs)
         Next
+        AddMassGeometric(KRed)
     End Sub
 
     'Lumped nodal masses: half of the member mass to each end (vertical members over the full length, others over the clear length, as
@@ -284,7 +285,7 @@ Partial Public Class FemStatic
                 Dim f(11) As Double
                 For i = 0 To 11
                     Dim sm As Double = 0
-                    For j = 0 To 11 : sm += ChainK(ei).K(i, j) * ul(j) : Next
+                    For j = 0 To 11 : sm += ChainK(ei).KEl(i, j) * ul(j) : Next
                     f(i) = sm
                 Next
                 Fn(k)(ei) = FaceForces(ChainK(ei), ul, -1)
