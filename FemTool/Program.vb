@@ -432,9 +432,41 @@ Public Module Program
                     Console.WriteLine("  ETABS " & FLC(k) & " " & FST(k) & " sta " & FSta(k).ToString("0.000") & " P " & P(k).ToString("0.00") & " V2 " & V2(k).ToString("0.00") & " V3 " & V3(k).ToString("0.00") & " M2 " & Mo2(k).ToString("0.00") & " M3 " & Mo3(k).ToString("0.00"))
                 Next
             End If
+            If Environment.GetEnvironmentVariable("FEM_ENVTABLE") = "1" Then
+                Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
+                If Sap.DatabaseTables.GetTableForDisplayArray("Steel Column Envelope - AISC 360-22", Nothing, "", tV, tF, tN, tD) = 0 Then
+                    Console.WriteLine("  envelope fields: " & String.Join(",", tF))
+                    For i = 0 To tN - 1 : Console.WriteLine("   " & String.Join(" | ", Enumerable.Range(0, tF.Length).Where(Function(j) {"Story", "UniqueName", "DesignSect", "SectClass", "BCMajor", "BCMinor"}.Contains(tF(j))).Select(Function(j) tF(j) & "=" & tD(i * tF.Length + j)))) : Next
+                End If
+            End If
             Dim Fem = femS.DesignMembers(Res, Static1, M.Prefs, RSd)
             If Static1.Any(Function(c) c.Nonlinear) Then Fem = femS.DesignNonlinear(Static1, M.Prefs, Fem) : Console.WriteLine("nonlinear combinations designed: " & Static1.Where(Function(c) c.Nonlinear).Count & " (" & sw.ElapsedMilliseconds & " ms in total)")
             Console.WriteLine("FEM design of " & M.Elements.Count & " members: " & sw.ElapsedMilliseconds & " ms")
+            If Environment.GetEnvironmentVariable("FEM_SCWBDATA") = "1" Then
+                Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
+                If Sap.DatabaseTables.GetTableForDisplayArray("Steel Column Envelope - AISC 360-22", Nothing, "", tV, tF, tN, tD) = 0 Then
+                    Dim iU = Array.IndexOf(tF, "UniqueName"), iMa = Array.IndexOf(tF, "BCMajor"), iMi = Array.IndexOf(tF, "BCMinor"), iPM = Array.IndexOf(tF, "PMMCombo")
+                    Dim EIx As New Dictionary(Of String, Integer)
+                    For i = 0 To M.Elements.Count - 1 : EIx(M.Elements(i).Name) = i : Next
+                    For r = 0 To tN - 1
+                        Dim e0 As Integer = EIx(tD(r * tF.Length + iU))
+                        Dim col = M.Elements(e0)
+                        Dim top As Integer = If(M.Nodes(col.NI).Z > M.Nodes(col.NJ).Z, col.NI, col.NJ)
+                        Dim att = M.Elements.Where(Function(el) el.NI = top OrElse el.NJ = top).ToList()
+                        Dim above = att.Where(Function(el) Math.Abs(el.Axes(0, 2)) > 0.9 AndAlso M.Nodes(If(el.NI = top, el.NJ, el.NI)).Z > M.Nodes(top).Z).ToList()
+                        Dim sb As New System.Text.StringBuilder
+                        sb.Append("  SCWB col " & col.Name & " " & col.Section.Name & " Z33 " & col.Section.Z33.ToString("0.000000") & " Z22 " & col.Section.Z22.ToString("0.000000") & " A " & col.Section.A.ToString("0.00000") & " d " & col.Section.Depth.ToString("0.000") & " ang(" & col.Axes(1, 0).ToString("0") & "," & col.Axes(1, 1).ToString("0") & ") ETABS maj " & tD(r * tF.Length + iMa) & " min " & tD(r * tF.Length + iMi))
+                        sb.Append(" PuMax " & Fem(e0).PuMax.ToString("0.0") & " Fy " & col.Section.Fy.ToString("0.0") & " Fu " & col.Section.Fu.ToString("0.0"))
+                        sb.Append(" | top node " & M.Nodes(top).Name & " above:" & String.Join(",", above.Select(Function(a) a.Name & ":" & a.Section.Name)))
+                        For Each bm In att.Where(Function(el) Math.Abs(el.Axes(0, 2)) <= 0.9)
+                            Dim rel As String = String.Join("", Enumerable.Range(0, 6).Select(Function(d) If(If(bm.NI = top, bm.ReleaseI(d), bm.ReleaseJ(d)), "1", "0")))
+                            Dim dir As String = If(Math.Abs(bm.Axes(0, 0)) > 0.9, "x", "y")
+                            sb.Append(" | beam " & bm.Name & dir & ":" & bm.Section.Name & " Z33 " & bm.Section.Z33.ToString("0.000000") & " Z22 " & bm.Section.Z22.ToString("0.000000") & " d " & bm.Section.Depth.ToString("0.000") & " L" & bm.Length.ToString("0.0") & " rel " & rel & " off " & If(bm.NI = top, bm.OffsetI, bm.OffsetJ).ToString("0.000"))
+                        Next
+                        Console.WriteLine(sb.ToString())
+                    Next
+                End If
+            End If
             Dim EIdx As New Dictionary(Of String, Integer)
             For i = 0 To M.Elements.Count - 1 : EIdx(M.Elements(i).Name) = i : Next
             Dim staticNames As New HashSet(Of String)(Static1.Select(Function(c) c.Name))
@@ -484,6 +516,58 @@ Public Module Program
                     End If
                 Next
                 Console.WriteLine("  >2% differences: columns " & nCol & " (FEM lower " & lowCol & ", higher " & hiCol & "), beams " & nBm & " (FEM lower " & lowBm & ", higher " & hiBm & ")")
+            End If
+            If Environment.GetEnvironmentVariable("FEM_SCWBCMP") = "1" Then
+                Dim bcMaj() As Double = Nothing, bcMin() As Double = Nothing
+                femS.StrongColumnWeakBeam(Fem, bcMaj, bcMin)
+                Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
+                If Sap.DatabaseTables.GetTableForDisplayArray("Steel Column Envelope - AISC 360-22", Nothing, "", tV, tF, tN, tD) = 0 Then
+                    Dim iU = Array.IndexOf(tF, "UniqueName"), iMa = Array.IndexOf(tF, "BCMajor"), iMi = Array.IndexOf(tF, "BCMinor")
+                    Dim nCmp As Integer = 0, sumE As Double = 0, maxE As Double = 0, nMiss As Integer = 0
+                    For r = 0 To tN - 1
+                        Dim e0 As Integer = EIdx(tD(r * tF.Length + iU))
+                        For pl = 0 To 1
+                            Dim sv As String = tD(r * tF.Length + If(pl = 0, iMa, iMi))
+                            Dim ev As Double
+                            If Not Double.TryParse(sv, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture, ev) OrElse ev <= 0 Then
+                                If If(pl = 0, bcMaj(e0), bcMin(e0)) > 0 AndAlso String.IsNullOrEmpty(sv) Then nMiss += 1 : Console.WriteLine("    blank in ETABS: col " & tD(r * tF.Length + iU) & " " & M.Elements(e0).Section.Name & If(pl = 0, " major", " minor") & " FEM " & If(pl = 0, bcMaj(e0), bcMin(e0)).ToString("0.000"))
+                                Continue For
+                            End If
+                            Dim fv As Double = If(pl = 0, bcMaj(e0), bcMin(e0))
+                            Dim re As Double = Math.Abs(fv - ev) / ev
+                            nCmp += 1 : sumE += re : maxE = Math.Max(maxE, re)
+                        Next
+                    Next
+                    Console.WriteLine("  SCWB comparison: " & nCmp & " ratios, mean |rel error| " & (sumE / Math.Max(nCmp, 1) * 100).ToString("0.00") & "%, max " & (maxE * 100).ToString("0.00") & "%; FEM value where ETABS leaves blank: " & nMiss)
+                End If
+            End If
+            If Environment.GetEnvironmentVariable("FEM_SEISCMP") = "1" Then
+                Dim n2 As Integer, f2() As String = Nothing, rt() As Double = Nothing, rtype() As Integer = Nothing, loc() As Double = Nothing, cb() As String = Nothing, es() As String = Nothing, ws() As String = Nothing
+                Sap.DesignSteel.GetSummaryResults("All", n2, f2, rt, rtype, loc, cb, es, ws, eItemType.Group)
+                Dim agree As Integer = 0, onlyE As Integer = 0, onlyF As Integer = 0, agreeLb As Integer = 0, onlyELb As Integer = 0, onlyFLb As Integer = 0
+                Dim EIx2 As New Dictionary(Of String, Integer)
+                For i = 0 To M.Elements.Count - 1 : EIx2(M.Elements(i).Name) = i : Next
+                Dim shown As Integer = 0
+                For i = 0 To n2 - 1
+                    Dim e0 As Integer = EIx2(f2(i))
+                    Dim el = M.Elements(e0)
+                    Dim isCol As Boolean = Math.Abs(el.Axes(0, 2)) > 0.9
+                    Dim msg As String = If(es(i), "")
+                    Dim eCompact As Boolean = msg.Contains("not seismically compact")
+                    Dim eLb As Boolean = msg.Contains("Lb/ry")
+                    Dim ca As Double = Fem(e0).PuMax / (0.9 * el.Section.Fy * el.Section.A)
+                    Dim moment As Boolean = isCol OrElse Not (el.ReleaseI(4) OrElse el.ReleaseI(5) OrElse el.ReleaseJ(4) OrElse el.ReleaseJ(5))
+                    Dim fCompact As Boolean = moment AndAlso Not SeismicCompact(el.Section, True, ca)
+                    Dim lbv As Double = If(el.UnbracedLTB > 0, el.UnbracedLTB, el.Length - el.OffsetI - el.OffsetJ)
+                    Dim fLb As Boolean = Not isCol AndAlso moment AndAlso Not LbRyOk(el.Section, lbv, True)
+                    If eCompact = fCompact Then agree += 1 Else If eCompact Then onlyE += 1 Else onlyF += 1
+                    If eLb = fLb Then agreeLb += 1 Else If eLb Then onlyELb += 1 Else onlyFLb += 1
+                    If (eCompact <> fCompact OrElse eLb <> fLb) AndAlso shown < 8 Then
+                        shown += 1
+                        Console.WriteLine("    mismatch frame " & f2(i) & " " & el.Section.Name & If(isCol, " col", " beam") & " Ca " & ca.ToString("0.000") & " lb " & lbv.ToString("0.00") & " h/tw " & (WebHeight(el.Section) / el.Section.WebThickness).ToString("0.0") & " bf/2tf " & (el.Section.Width / 2 / el.Section.FlangeThickness).ToString("0.00") & " root " & Math.Sqrt(el.Section.E / (1.1 * el.Section.Fy)).ToString("0.00") & ": ETABS compact-error " & eCompact & " Lb-error " & eLb & " | FEM " & fCompact & " " & fLb)
+                    End If
+                Next
+                Console.WriteLine("  seismic compactness: agree " & agree & ", only ETABS flags " & onlyE & ", only FEM flags " & onlyF & "; Lb/ry: agree " & agreeLb & ", only ETABS " & onlyELb & ", only FEM " & onlyFLb)
             End If
             Dim sortedRel = Rows.Select(Function(x) x.Item1).OrderBy(Function(x) x).ToList()
             If sortedRel.Count > 0 Then Console.WriteLine("PMM error percentiles: 50% " & (sortedRel(sortedRel.Count \ 2) * 100).ToString("0.00") & "%, 95% " & (sortedRel(CInt(sortedRel.Count * 0.95) - 1) * 100).ToString("0.00") & "%, members above 2%: " & sortedRel.Where(Function(x) x > 0.02).Count() & ", above 5%: " & sortedRel.Where(Function(x) x > 0.05).Count())

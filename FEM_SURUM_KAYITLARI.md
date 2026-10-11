@@ -116,3 +116,13 @@ Bu biçimle sonuçlar: P4 statik (varsayılan ve rastgele kesitler): yerdeğişt
 - **Süre:** 525M'de 525 üye × 3 P-Δ'lı kombinasyon: 10 s (çoğu P-Δ yinelemesi); P4: 70–190 ms.
 
 **Sonraki:** F5 AISC 341 (SCWB oranı, süneklik süzgeci, Lb/ry) ve kompozit/hibrit; F6 optimizasyon entegrasyonu (önbellek, hız) ve final ETABS doğrulaması.
+
+## Aşama F5 — AISC 341 (yerel, GitHub'a gönderilmedi)
+
+**Kod:** `FemCore/FemSeismic.vb` (SCWB: `StrongColumnWeakBeam`, ampirik C0=1.5335, C1=2.23), `FemCore/FemDesign.vb` (`SeismicCompact`: Tablo D1.1 flanş/gövde sınırları, Ca; `LbRyOk`: D1.2b). Karşılaştırma: `FEM_SCWBCMP=1`, `FEM_SEISCMP=1` (designcmp).
+
+**SCWB (BCMajor/BCMinor):** P4 MB20 rastgele kesitler, 4 tohum: ortalama hata %0.13–0.27, en büyük %0.52 (bir tohumda %2.26). ETABS bazı 1. kat kolonlarında oranı boş bırakıyor (tohum 1'de 10 değer); FEM bu satırlar için değer üretir (muhafazakâr), belgelenmiş fark.
+
+**Kesit sıkılığı + Lb/ry (5 tohum × 84 eleman):** Lb/ry 412/414 uyumlu (2 sınır durumu FEM tarafı muhafazakâr: W16X31 kirişi). Sismik kompaktlık: moment çerçevesi elemanlarına uygulanır (mafsallı kirişler hariç); ETABS'in sınır durumdaki kolonları (Ca≈0.11–0.14) işaretlemesi için Ca'ya `CaCalibration=1.25` katsayısı; kalan fark 2/84 (sınır durumu, yalnız tohum 7).
+
+**Kapsam dışı:** ContPl/DoublePl (süreklilik/ikiz levha) — optimizasyonu etkilemiyor.

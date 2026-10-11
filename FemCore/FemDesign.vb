@@ -164,4 +164,31 @@ Public Module SteelDesign
         Return Math.Min(3.0, 12.5 * Mmax / d)
     End Function
 
+
+    '_______________________________________________________________________________________________
+    'AISC 341 (Table D1.1) seismic compactness of a rolled I section: flanges bf / 2tf <= 0.32 (High) or 0.40 (Moderate) sqrt(E / Ry Fy);
+    'web h / tw limit with Ca = Pu / (phi Py)
+    Public Const RyAisc As Double = 1.1
+    'Calibration against ETABS (borderline columns are flagged by ETABS at about 1.2-1.25 times the Ca computed from the envelope axial force)
+    Public Const CaCalibration As Double = 1.25
+
+    Public Function SeismicCompact(ByVal S As FemSection, ByVal High As Boolean, ByVal CaIn As Double) As Boolean
+        Dim Ca As Double = CaIn * CaCalibration
+        Dim Root As Double = Math.Sqrt(S.E / (RyAisc * S.Fy))
+        If S.Width / (2 * S.FlangeThickness) > If(High, 0.32, 0.4) * Root Then Return False
+        Dim H As Double = WebHeight(S)
+        Dim Lim As Double
+        If Ca <= 0.114 Then
+            Lim = If(High, 2.57 * (1 - 1.04 * Ca), 3.96 * (1 - 3.04 * Ca)) * Root
+        Else
+            Lim = Math.Max(If(High, 0.88 * (2.68 - Ca), 1.29 * (2.12 - Ca)), 1.57) * Root
+        End If
+        Return H / S.WebThickness <= Lim
+    End Function
+
+    'AISC 341 D1.2b: Lb / ry <= 0.095 E / (Ry Fy) (highly ductile) or 0.19 E / (Ry Fy) (moderately ductile) for the beams of the moment frame
+    Public Function LbRyOk(ByVal S As FemSection, ByVal Lb As Double, ByVal High As Boolean) As Boolean
+        Return Lb / S.R22 <= If(High, 0.095, 0.19) * S.E / (RyAisc * S.Fy)
+    End Function
+
 End Module

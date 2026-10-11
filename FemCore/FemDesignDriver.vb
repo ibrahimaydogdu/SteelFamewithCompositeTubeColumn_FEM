@@ -6,6 +6,7 @@ Public Class MemberRatios
     Public PMMCombo As String
     Public PMMStation As Double
     Public VMajCombo As String
+    Public PuMax As Double                  'largest compression over all combinations and stations (kN)
 End Class
 
 Partial Public Class FemStatic
@@ -250,6 +251,7 @@ Partial Public Class FemStatic
                     Dim k As Integer = j
                     Dim r3 As Double = Math.Abs(sf1(5)) / Mc3(k)
                     Dim r2 As Double = Math.Abs(sf1(4)) / McMin
+                    If Pu > Res.PuMax Then Res.PuMax = Pu
                     Dim rp As Double = Pr / Pc
                     Dim pmm As Double = If(rp >= 0.2, rp + 8.0 / 9.0 * (r3 + r2), rp / 2 + r3 + r2)
                     If ei = TraceElement Then Console.WriteLine("     " & cmb.Name.PadRight(18) & " x=" & xs(j).ToString("0.000") & " N " & sf1(0).ToString("0.00").PadLeft(9) & " V2 " & sf1(1).ToString("0.00").PadLeft(8) & " V3 " & sf1(2).ToString("0.00").PadLeft(8) & " M2 " & sf1(4).ToString("0.00").PadLeft(8) & " M3 " & sf1(5).ToString("0.00").PadLeft(8) & "  Pc " & Pc.ToString("0.0") & " Mc3 " & Mc3(k).ToString("0.0") & " Mc2 " & McMin.ToString("0.0") & "  pmm " & pmm.ToString("0.0000"))
