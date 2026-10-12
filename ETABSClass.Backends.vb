@@ -407,7 +407,8 @@ Partial Public Class ETABS_Class
                     For Each nm In Names
                         Dim Vs = Fem.Displacements(Current, nm)
                         If Vs Is Nothing Then
-                            If MissingCases.Add(nm) Then O.Errorlogprint("Warning: FEM evaluator: drift case / combination '" & nm & "' is not in the FEM model, skipped")
+                            'unknown name (the case type is not supported) or a nonlinear case that could not be solved (Current.Failed is set then)
+                            If Fem.FindCombo(nm) Is Nothing AndAlso MissingCases.Add(nm) Then O.Errorlogprint("Warning: FEM evaluator: drift case / combination '" & nm & "' is not in the FEM model, skipped")
                             Continue For
                         End If
                         For Each U In Vs

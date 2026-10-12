@@ -23,6 +23,25 @@ Public Module Program
             End If
             If args(0) = "selftest" Then
                 SelfTest()
+            ElseIf args(0) = "combos" Then
+                StartEtabs()
+                Try
+                    Sap.File.OpenFile(args(1))
+                    Dim Mc = New EtabsReader(Sap).Read()
+                    Console.WriteLine("combos in the FEM model: " & Mc.Combos.Count)
+                    For Each c In Mc.Combos : Console.WriteLine("  " & c.Name & ": " & String.Join(" + ", c.Terms.Select(Function(t) t.Factor.ToString("0.###") & "*" & t.Name)) & If(c.RSTerms.Count > 0, " | RS " & String.Join(" + ", c.RSTerms.Select(Function(t) t.Factor.ToString("0.###") & "*" & t.Name)), "") & If(c.Nonlinear, " [nonlinear]", "")) : Next
+                    Console.WriteLine("design combos: " & String.Join(", ", Mc.DesignCombos))
+                    Console.WriteLine("notes: " & String.Join(" ; ", Mc.Notes))
+                    Dim nC As Integer, cn() As String = Nothing
+                    Sap.RespCombo.GetNameList(nC, cn)
+                    For Each c1 In cn
+                        Dim ni As Integer, tp() As eCNameType = Nothing, cname() As String = Nothing, sfc() As Double = Nothing
+                        Sap.RespCombo.GetCaseList(c1, ni, tp, cname, sfc)
+                        Console.WriteLine("  ETABS combo " & c1 & ": " & String.Join(" + ", Enumerable.Range(0, ni).Select(Function(k) sfc(k).ToString("0.###") & "*" & cname(k) & "(" & tp(k).ToString() & ")")))
+                    Next
+                Finally
+                    StopEtabs()
+                End Try
             ElseIf args(0) = "bench" Then
                 Bench(args(1))
             ElseIf args(0) = "designcmp" Then

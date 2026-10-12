@@ -120,17 +120,25 @@ Public Class FemEvaluator
     Private Function NonlinearSolution(ByVal Ev As FemEvaluation, ByVal Cmb As FemCombo) As Tuple(Of StaticResults, FemStatic)
         Dim T As Tuple(Of StaticResults, FemStatic) = Nothing
         If Ev.Nonlinear.TryGetValue(Cmb.Name, T) Then Return T
-        Dim R As StaticResults
-        Try
-            R = Ev.Solver.SolveIterative(Cmb.Terms, Ev.StaticRes)
-        Catch ex As Exception
-            'a member whose axial force exceeds its elastic buckling load: unstable, like a case ETABS cannot finish
-            R = New StaticResults With {.Failed = True, .Message = "case " & Cmb.Name & ": " & ex.Message}
-        End Try
+        Dim R As StaticResults = TrySolveIterative(Ev, Cmb, False)
+        If R.Failed Then
+            'a member whose axial force exceeds its elastic buckling load makes the consistent geometric stiffness indefinite; ETABS P-Delta has
+            'no member buckling (P-delta): the case is solved again with the lumped P/L geometric stiffness (the design check shows the overstress)
+            FemProfile.Hit("pdelta.lumped fallback")
+            R = TrySolveIterative(Ev, Cmb, True)
+        End If
         If R.Failed Then Ev.Failed = True : Ev.Message = R.Message
         T = Tuple.Create(R, Ev.Solver.LastIterSolver)
         Ev.Nonlinear(Cmb.Name) = T
         Return T
+    End Function
+
+    Private Function TrySolveIterative(ByVal Ev As FemEvaluation, ByVal Cmb As FemCombo, ByVal Lumped As Boolean) As StaticResults
+        Try
+            Return Ev.Solver.SolveIterative(Cmb.Terms, Ev.StaticRes, Lumped:=Lumped)
+        Catch ex As Exception
+            Return New StaticResults With {.Failed = True, .Message = "case " & Cmb.Name & ": " & ex.Message}
+        End Try
     End Function
 
     Public Function FindCombo(ByVal Name As String) As FemCombo

@@ -38,7 +38,7 @@ Partial Public Class FemStatic
 
     'Nonlinear static case with geometric nonlinearity "P-Delta": iterates until the axial forces of the equilibrium state no longer change
     'Base: the linear solution of the patterns (optional): its axial forces start the iteration (one solution less)
-    Public Function SolveIterative(ByVal Terms As List(Of FemTerm), Optional ByVal Base As StaticResults = Nothing, Optional ByVal MaxIter As Integer = 40, Optional ByVal Tol As Double = 0.000001) As StaticResults
+    Public Function SolveIterative(ByVal Terms As List(Of FemTerm), Optional ByVal Base As StaticResults = Nothing, Optional ByVal MaxIter As Integer = 40, Optional ByVal Tol As Double = 0.000001, Optional ByVal Lumped As Boolean = False) As StaticResults
         Dim Tmp As New FemModel With {.DiaphragmCount = M.DiaphragmCount, .AxialFactor = M.AxialFactor, .FlexuralFactor = M.FlexuralFactor}
         Tmp.Nodes = M.Nodes : Tmp.Elements = M.Elements : Tmp.Sections = M.Sections
         Tmp.Patterns.Add(M.CombinePatterns(Terms, "COMBO"))
@@ -54,6 +54,8 @@ Partial Public Class FemStatic
         Dim Last As StaticResults = Nothing
         Dim Preset = New FemStatic(Tmp).LoadsOfAllElements()
         Dim oldElastic As Boolean = ElasticForces
+        Dim oldLumped As Boolean = GeometricLumped
+        GeometricLumped = Lumped          'lumped P/L geometric stiffness: P-Delta without the member buckling (P-delta) of the consistent matrix
         ElasticForces = False           'nonlinear static P-Delta (ETABS): member forces and reactions are the forces of the deformed equilibrium state (K + Kg)
         Try
         For it = 1 To MaxIter
@@ -75,6 +77,7 @@ Partial Public Class FemStatic
         Next
         Finally
             ElasticForces = oldElastic
+            GeometricLumped = oldLumped
         End Try
         Return Last
     End Function
