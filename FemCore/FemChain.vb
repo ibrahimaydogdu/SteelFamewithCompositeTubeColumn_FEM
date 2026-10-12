@@ -105,8 +105,7 @@ Public Module FemChain
                              Next
                              If rel.Count > 0 Then
                                  Dim kk = CType(ks.Clone(), Double(,))
-                                 For p = 0 To NPat - 1 : Dim kc = CType(ks.Clone(), Double(,)) : Condense(kc, fs(p), rel) : Next
-                                 Condense(kk, New Double(11) {}, rel)
+                                 CondenseMulti(kk, fs, rel)
                                  ks = kk
                              End If
                              If isClear Then
@@ -142,25 +141,33 @@ Public Module FemChain
             For i = 0 To 11 : Fe(p)(i) = F(p)(i) : Next
         Next
         If nInt > 0 Then
-            Dim Kii = Matrix(Of Double).Build.Dense(nInt, nInt), Kie = Matrix(Of Double).Build.Dense(nInt, 12)
+            Dim Kii(nInt - 1, nInt - 1) As Double
+            Dim Rhs(nInt - 1, 12 + NPat - 1) As Double          'Kie (12 columns) and the internal loads (one column per pattern)
             For i = 0 To nInt - 1
                 For j = 0 To nInt - 1 : Kii(i, j) = Kg(12 + i, 12 + j) : Next
-                For j = 0 To 11 : Kie(i, j) = Kg(12 + i, j) : Next
+                For j = 0 To 11 : Rhs(i, j) = Kg(12 + i, j) : Next
+                For p = 0 To NPat - 1 : Rhs(i, 12 + p) = F(p)(12 + i) : Next
             Next
-            Dim Chol = Kii.Cholesky()
-            Dim Gm = Chol.Solve(Kie)
+            Dim Y = SolveSmall(Kii, Rhs, True)
             R.G = New Double(nInt - 1, 11) {}
-            For i = 0 To nInt - 1 : For j = 0 To 11 : R.G(i, j) = Gm(i, j) : Next : Next
-            Dim Corr = Kie.Transpose() * Gm
-            For i = 0 To 11 : For j = 0 To 11 : Kee(i, j) -= Corr(i, j) : Next : Next
+            For i = 0 To nInt - 1 : For j = 0 To 11 : R.G(i, j) = Y(i, j) : Next : Next
+            For i = 0 To 11
+                For j = 0 To 11
+                    Dim s As Double = 0
+                    For k = 0 To nInt - 1 : s += Kg(12 + k, i) * Y(k, j) : Next
+                    Kee(i, j) -= s
+                Next
+            Next
             R.H = New Double(NPat - 1)() {}
             For p = 0 To NPat - 1
-                Dim fi = Vector(Of Double).Build.Dense(nInt)
-                For i = 0 To nInt - 1 : fi(i) = F(p)(12 + i) : Next
-                Dim h = Chol.Solve(fi)
-                R.H(p) = h.ToArray()
-                Dim c = Kie.Transpose() * h
-                For i = 0 To 11 : Fe(p)(i) -= c(i) : Next
+                Dim h(nInt - 1) As Double
+                For i = 0 To nInt - 1 : h(i) = Y(i, 12 + p) : Next
+                R.H(p) = h
+                For i = 0 To 11
+                    Dim s As Double = 0
+                    For k = 0 To nInt - 1 : s += Kg(12 + k, i) * h(k) : Next
+                    Fe(p)(i) -= s
+                Next
             Next
         Else
             R.H = New Double(NPat - 1)() {}

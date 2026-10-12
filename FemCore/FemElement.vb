@@ -75,29 +75,87 @@ Public Module FemElementMath
         Return R
     End Function
 
-    'Static condensation of the released DOF: K' = Kaa - Kar Krr^-1 Kra (released rows and columns become zero); the same for the load vector
-    Public Sub Condense(ByVal K As Double(,), ByVal F As Double(), ByVal Released As List(Of Integer))
+    'Solution of A X = B for small dense systems (Gauss elimination with partial pivoting); A (n x n) and B (n x m) are not modified
+    Public Function SolveSmall(ByVal A As Double(,), ByVal B As Double(,), Optional ByVal Positive As Boolean = False) As Double(,)
+        Dim n As Integer = A.GetLength(0), m As Integer = B.GetLength(1)
+        Dim W(n - 1, n - 1) As Double, X(n - 1, m - 1) As Double
+        For i = 0 To n - 1
+            For j = 0 To n - 1 : W(i, j) = A(i, j) : Next
+            For j = 0 To m - 1 : X(i, j) = B(i, j) : Next
+        Next
+        For c = 0 To n - 1
+            Dim p As Integer = c, mx As Double = Math.Abs(W(c, c))
+            If Positive Then
+                'symmetric positive definite: no pivoting, every pivot must be positive (a member beyond its buckling load is not)
+                If Not (W(c, c) > 0) Then Throw New InvalidOperationException("Matrix must be positive definite.")
+            Else
+                For r = c + 1 To n - 1
+                    If Math.Abs(W(r, c)) > mx Then mx = Math.Abs(W(r, c)) : p = r
+                Next
+                If mx = 0 OrElse Double.IsNaN(mx) Then Throw New InvalidOperationException("Matrix must be positive definite.")
+            End If
+            If p <> c Then
+                For j = 0 To n - 1 : Dim t As Double = W(c, j) : W(c, j) = W(p, j) : W(p, j) = t : Next
+                For j = 0 To m - 1 : Dim t As Double = X(c, j) : X(c, j) = X(p, j) : X(p, j) = t : Next
+            End If
+            Dim d As Double = W(c, c)
+            For r = c + 1 To n - 1
+                Dim f As Double = W(r, c) / d
+                If f = 0 Then Continue For
+                For j = c To n - 1 : W(r, j) -= f * W(c, j) : Next
+                For j = 0 To m - 1 : X(r, j) -= f * X(c, j) : Next
+            Next
+        Next
+        For c = n - 1 To 0 Step -1
+            For j = 0 To m - 1
+                Dim sm As Double = X(c, j)
+                For k = c + 1 To n - 1 : sm -= W(c, k) * X(k, j) : Next
+                X(c, j) = sm / W(c, c)
+            Next
+        Next
+        Return X
+    End Function
+
+    'Static condensation of the released DOF: K' = Kaa - Kar Krr^-1 Kra (released rows and columns become zero); the same for the load vectors
+    Public Sub CondenseMulti(ByVal K As Double(,), ByVal Fs As Double()(), ByVal Released As List(Of Integer))
         If Released.Count = 0 Then Return
         Dim Kept As New List(Of Integer)
         For i = 0 To 11 : If Not Released.Contains(i) Then Kept.Add(i)
         Next
-        Dim nr As Integer = Released.Count, na As Integer = Kept.Count
-        Dim Krr = Matrix(Of Double).Build.Dense(nr, nr), Kar = Matrix(Of Double).Build.Dense(na, nr)
+        Dim nr As Integer = Released.Count, na As Integer = Kept.Count, np As Integer = Fs.Length
+        Dim Krr(nr - 1, nr - 1) As Double
         For i = 0 To nr - 1 : For j = 0 To nr - 1 : Krr(i, j) = K(Released(i), Released(j)) : Next : Next
-        For i = 0 To na - 1 : For j = 0 To nr - 1 : Kar(i, j) = K(Kept(i), Released(j)) : Next : Next
-        Dim X = Krr.Solve(Kar.Transpose())              'Krr^-1 Kra
-        Dim Corr = Kar * X
-        Dim fr = Vector(Of Double).Build.Dense(nr)
-        For i = 0 To nr - 1 : fr(i) = F(Released(i)) : Next
-        Dim fc = Kar * Krr.Solve(fr)
+        'right-hand sides: Kra (na columns) and the released load components (one column per load vector)
+        Dim B(nr - 1, na + np - 1) As Double
+        For i = 0 To nr - 1
+            For j = 0 To na - 1 : B(i, j) = K(Released(i), Kept(j)) : Next
+            For p = 0 To np - 1 : B(i, na + p) = Fs(p)(Released(i)) : Next
+        Next
+        Dim Y = SolveSmall(Krr, B)
         For i = 0 To na - 1
-            For j = 0 To na - 1 : K(Kept(i), Kept(j)) -= Corr(i, j) : Next
-            F(Kept(i)) -= fc(i)
+            For j = 0 To na - 1
+                Dim s As Double = 0
+                For r = 0 To nr - 1 : s += K(Kept(i), Released(r)) * Y(r, j) : Next
+                K(Kept(i), Kept(j)) -= s
+            Next
+        Next
+        For p = 0 To np - 1
+            Dim fc(na - 1) As Double
+            For i = 0 To na - 1
+                Dim s As Double = 0
+                For r = 0 To nr - 1 : s += K(Kept(i), Released(r)) * Y(r, na + p) : Next
+                fc(i) = s
+            Next
+            For i = 0 To na - 1 : Fs(p)(Kept(i)) -= fc(i) : Next
+            For Each r In Released : Fs(p)(r) = 0 : Next
         Next
         For Each r In Released
             For j = 0 To 11 : K(r, j) = 0 : K(j, r) = 0 : Next
-            F(r) = 0
         Next
+    End Sub
+
+    Public Sub Condense(ByVal K As Double(,), ByVal F As Double(), ByVal Released As List(Of Integer))
+        CondenseMulti(K, New Double()() {F}, Released)
     End Sub
 
     'Global-to-local transformation of the 12 element DOF (4 blocks of the 3x3 direction cosine matrix)

@@ -54,7 +54,7 @@ Partial Public Class FemStatic
         ReDim ChainK(ne - 1)
         Dim Kgl(ne - 1)(,) As Double
         Dim NoLoads(-1) As List(Of LocalLoad)
-        Parallel.For(0, ne, Sub(ei)
+        Parallel.For(0, ne, FemProfile.Options, Sub(ei)
                                 Dim E = M.Elements(ei)
                                 Dim Tm = TransformationMatrix(E)
                                 Dim ch = Build(E, NoLoads, 0, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))

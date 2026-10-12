@@ -122,7 +122,7 @@ Public Class FemEvaluator
         If Ev.Nonlinear.TryGetValue(Cmb.Name, T) Then Return T
         Dim R As StaticResults
         Try
-            R = Ev.Solver.SolveIterative(Cmb.Terms)
+            R = Ev.Solver.SolveIterative(Cmb.Terms, Ev.StaticRes)
         Catch ex As Exception
             'a member whose axial force exceeds its elastic buckling load: unstable, like a case ETABS cannot finish
             R = New StaticResults With {.Failed = True, .Message = "case " & Cmb.Name & ": " & ex.Message}
@@ -187,7 +187,7 @@ Public Class FemEvaluator
                 Dim sg As New FemCombo With {.Name = cmb.Name}
                 sg.Terms.Add(New FemTerm With {.Name = "COMBO", .Factor = 1.0})
                 Dim Single1 As New List(Of FemCombo) From {sg}
-                System.Threading.Tasks.Parallel.For(0, Model.Elements.Count, Sub(ei)
+                System.Threading.Tasks.Parallel.For(0, Model.Elements.Count, FemProfile.Options, Sub(ei)
                                                                                  Dim r1 = T.Item2.DesignElement(T.Item1, ei, Single1, Model.Prefs)
                                                                                  Dim c0 = Fem(ei)
                                                                                  If r1.PMM > c0.PMM Then c0.PMM = r1.PMM : c0.P = r1.P : c0.MMaj = r1.MMaj : c0.MMin = r1.MMin : c0.PMMCombo = cmb.Name : c0.PMMStation = r1.PMMStation

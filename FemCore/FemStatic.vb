@@ -11,11 +11,21 @@ Public Module FemProfile
         End SyncLock
         Return w
     End Function
+    Public ReadOnly Counts As New Dictionary(Of String, Integer)
+    'Degree of parallelism of the element loops (default: all cores; environment variable FEM_THREADS)
+    Public ReadOnly Options As New ParallelOptions With {.MaxDegreeOfParallelism = If(Integer.TryParse(Environment.GetEnvironmentVariable("FEM_THREADS"), Nothing) AndAlso Integer.Parse(Environment.GetEnvironmentVariable("FEM_THREADS")) > 0, Integer.Parse(Environment.GetEnvironmentVariable("FEM_THREADS")), -1)}
+    Public Sub Hit(ByVal Name As String)
+        SyncLock Counts
+            Dim n As Integer = 0
+            Counts.TryGetValue(Name, n)
+            Counts(Name) = n + 1
+        End SyncLock
+    End Sub
     Public Function Report() As String
-        Return String.Join("; ", Watches.Select(Function(kv) kv.Key & " " & kv.Value.ElapsedMilliseconds & " ms"))
+        Return String.Join("; ", Watches.Select(Function(kv) kv.Key & " " & kv.Value.ElapsedMilliseconds & " ms")) & " | " & String.Join("; ", Counts.Select(Function(kv) kv.Key & " x" & kv.Value))
     End Function
     Public Sub Reset()
-        Watches.Clear()
+        Watches.Clear() : Counts.Clear()
     End Sub
 End Module
 
@@ -43,6 +53,7 @@ Partial Public Class FemStatic
     Public AxialForces() As Double                  'axial force per element for the geometric stiffness (Nothing: linear)
     Private KFactor As SkylineMatrix                'factored reduced stiffness matrix of the last Solve / AssembleStiffness
     Private KDiag() As Double                       'diagonal of the stiffness matrix before the factorisation
+    Public PresetLoads()() As List(Of LocalLoad)    'loads of every element (local axes), when they are the same for all solutions of an iteration
 
     Public Sub New(ByVal Model As FemModel)
         M = Model
@@ -185,6 +196,12 @@ Partial Public Class FemStatic
     End Function
 
     'Element data of one analysis: chain, transformation, stiffness and loads in global axes
+    Friend Function LoadsOfAllElements() As List(Of LocalLoad)()()
+        Dim L(M.Elements.Count - 1)() As List(Of LocalLoad)
+        For ei = 0 To M.Elements.Count - 1 : L(ei) = ElementLoads(ei, M.Elements(ei)) : Next
+        Return L
+    End Function
+
     Private Class ElementData
         Public Chain As ChainResult
         Public T(,) As Double
@@ -196,7 +213,7 @@ Partial Public Class FemStatic
         Dim E = M.Elements(ei)
         Dim D As New ElementData
         Dim Tm = TransformationMatrix(E)
-        Dim ch = Build(E, ElementLoads(ei, E), np, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
+        Dim ch = Build(E, If(PresetLoads IsNot Nothing, PresetLoads(ei), ElementLoads(ei, E)), np, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
         D.Chain = ch : D.T = Tm
         Dim tmp(11, 11) As Double
         D.Kglobal = New Double(11, 11) {}
@@ -229,9 +246,10 @@ Partial Public Class FemStatic
         Dim np As Integer = M.Patterns.Count, ne As Integer = M.Elements.Count
         R.U = New Double(np - 1)() {} : R.Reaction = New Double(np - 1)() {} : R.EndForce = New Double(np - 1)()() {} : R.FaceForce = New Double(np - 1)()() {} : R.Axial = New Double(np - 1)() {}
         Dim Data(ne - 1) As ElementData
+        Hit("solve")
         Dim wCh = Watch("solve.chains") : wCh.Start()
         Try
-            Parallel.For(0, ne, Sub(ei) Data(ei) = BuildElement(ei, np))
+            Parallel.For(0, ne, FemProfile.Options, Sub(ei) Data(ei) = BuildElement(ei, np))
         Catch ex As AggregateException
             wCh.Stop()
             R.Failed = True : R.Message = ex.InnerExceptions(0).Message

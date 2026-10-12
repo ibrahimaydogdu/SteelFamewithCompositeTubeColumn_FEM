@@ -37,17 +37,28 @@ Partial Public Class FemStatic
     End Sub
 
     'Nonlinear static case with geometric nonlinearity "P-Delta": iterates until the axial forces of the equilibrium state no longer change
-    Public Function SolveIterative(ByVal Terms As List(Of FemTerm), Optional ByVal MaxIter As Integer = 40, Optional ByVal Tol As Double = 0.000001) As StaticResults
+    'Base: the linear solution of the patterns (optional): its axial forces start the iteration (one solution less)
+    Public Function SolveIterative(ByVal Terms As List(Of FemTerm), Optional ByVal Base As StaticResults = Nothing, Optional ByVal MaxIter As Integer = 40, Optional ByVal Tol As Double = 0.000001) As StaticResults
         Dim Tmp As New FemModel With {.DiaphragmCount = M.DiaphragmCount, .AxialFactor = M.AxialFactor, .FlexuralFactor = M.FlexuralFactor}
         Tmp.Nodes = M.Nodes : Tmp.Elements = M.Elements : Tmp.Sections = M.Sections
         Tmp.Patterns.Add(M.CombinePatterns(Terms, "COMBO"))
         Dim N() As Double = Nothing
+        If Base IsNot Nothing AndAlso Not Base.Failed Then
+            N = New Double(M.Elements.Count - 1) {}
+            For Each t In Terms
+                Dim p As Integer = M.PatternIndex(t.Name)
+                If p < 0 Then Continue For
+                For ei = 0 To N.Length - 1 : N(ei) += t.Factor * Base.Axial(p)(ei) : Next
+            Next
+        End If
         Dim Last As StaticResults = Nothing
+        Dim Preset = New FemStatic(Tmp).LoadsOfAllElements()
         Dim oldElastic As Boolean = ElasticForces
         ElasticForces = False           'nonlinear static P-Delta (ETABS): member forces and reactions are the forces of the deformed equilibrium state (K + Kg)
         Try
         For it = 1 To MaxIter
-            Dim S As New FemStatic(Tmp) With {.AxialForces = N}
+            FemProfile.Hit("pdelta.iteration")
+            Dim S As New FemStatic(Tmp) With {.AxialForces = N, .PresetLoads = Preset}
             LastIterSolver = S
             Dim R = S.Solve()
             If R.Failed Then Return R

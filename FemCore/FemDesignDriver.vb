@@ -157,7 +157,7 @@ Partial Public Class FemStatic
     'Design ratios of all members for combinations of the static patterns (sums of pattern results)
     Public Function DesignMembers(ByVal R As StaticResults, ByVal Combos As List(Of FemCombo), ByVal Prefs As DesignPrefs, Optional ByVal RS As Dictionary(Of String, RSResults) = Nothing) As MemberRatios()
         Dim Out(M.Elements.Count - 1) As MemberRatios
-        System.Threading.Tasks.Parallel.For(0, M.Elements.Count, Sub(ei) Out(ei) = DesignElement(R, ei, Combos, Prefs, RS))
+        System.Threading.Tasks.Parallel.For(0, M.Elements.Count, FemProfile.Options, Sub(ei) Out(ei) = DesignElement(R, ei, Combos, Prefs, RS))
         Return Out
     End Function
 
