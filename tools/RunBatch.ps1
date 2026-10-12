@@ -17,6 +17,7 @@
 #   Mode         Steel | Composite | Hybrid
 #   MaxAnalyses  analiz bütçesi      MemorySize  popülasyon / bellek      Seed  tohum
 #   Transition   (Hybrid) PerStack | PerGroup          AbcLimit  (ABC) terk sınırı
+#   Evaluator    Fem (varsayılan, kendi FEM çözücüsü; final ETABS ile doğrulanır) | Etabs (her aday ETABS'te)
 #   Config       bu koşu için App.config değerleri: "Anahtar=değer;Anahtar2=değer2", örn.
 #                SeismicDriftAmplification=5.5;UpperBoundMultiplier=1
 #                Doluysa koşuya kendi exe kopyası verilir (<Out>\<Name>\bin); boşsa -Exe klasörü ortak kullanılır.
@@ -120,6 +121,7 @@ foreach ($r in $List) {
         Set-Node $x '/FormInfo_/OptInfo/MemorySize' $r.MemorySize
         Set-Node $x '/FormInfo_/Seed' $r.Seed
         Set-Node $x '/FormInfo_/HideETABS' 'true'
+        Set-Node $x '/FormInfo_/UseFem' $(if ($r.Evaluator -eq 'Etabs') { 'false' } else { 'true' })
         Set-Node $x '/FormInfo_/CompositeColumns' $(if ($r.Mode -eq 'Steel') { 'false' } else { 'true' })
         Set-Node $x '/FormInfo_/HybridColumns' $(if ($r.Mode -eq 'Hybrid') { 'true' } else { 'false' })
         if ($r.Transition) { Set-Node $x '/FormInfo_/TransitionMode' $r.Transition }

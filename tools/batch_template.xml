@@ -53,5 +53,6 @@
   <SkipCtoC>false</SkipCtoC>
   <SkipBtoC>false</SkipBtoC>
   <PDelta>true</PDelta>
+  <UseFem>true</UseFem>
   <RestartEvery>100</RestartEvery>
 </FormInfo_>

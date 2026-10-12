@@ -4,6 +4,17 @@ Her iş "Aşama N" başlığıyla ve test sonuçlarıyla birlikte buraya yazıl�
 
 ---
 
+## 2026-10-12 — FEM sürümü (bu klasör): optimizasyon kendi FEM çözücüsüyle (Aşama F0–F7)
+
+Bu klasör ETABS tabanlı sürümün FEM'li kopyasıdır; ayrıntılı kayıtlar `FEM_SURUM_KAYITLARI.md` dosyasındadır.
+- Optimizasyon sırasında analiz ve çelik tasarım (AISC 360-22, AISC 341 SCWB / kompaktlık / Lb/ry) `FemCore` ile yapılır; ETABS modeli bir kez okumak, ilk sınır tasarımı ve **final doğrulama** için çalışır (`Evaluator`, formda *FEM solver (fast)*, varsayılan açık).
+- Hız: P4 0,15 s (ETABS 13,7 s), 525M 0,4 s (ETABS 40–50 s). ETABS ile fark: öteleme ort. +%0,5, D/C ort. −%0,4–2,4.
+- Final: en iyi tasarım ETABS'te yeniden analiz edilir, `_best.EDB` kaydedilir; ceza varsa aday arşivi (en çok 10) ve koruma adımları.
+- Kompozit (dolgulu tüp, gömülü) ve hibrit kolonlar FEM'de çalışır. Toplu koşuda `Evaluator` sütunu (varsayılan Fem).
+- Testler: P4 ve 525M uçtan uca; 16 yöntem; ETABS yolu özgün programla birebir aynı.
+
+---
+
 ## 2026-10-07 — Aşama 9: Model oluşturucu (`ModelBuilder`, ayrı program) ve iyileştirici düzeltmeleri (0.5.1)
 
 **Kullanıcı kararları** (öneri: `Ajan/Gorevler/ASAMA9_ONERI.md`, Bölüm 11)

@@ -7,6 +7,8 @@
 >
 > Also in this repository: **[ModelBuilder](ModelBuilder/README.md)** (Turkish), a separate program that builds the ETABS models of the examples from a CSV table (ASCE 7-22 loads and combinations, section pools, member groups) for use with the optimization program.
 >
+> **FEM version:** the optimization runs on the program's own finite element solver (about 100 times faster than ETABS: 0.15 s vs 13.7 s per design on the 84-member test frame); ETABS reads the model once and verifies the final design (`_best.EDB`). Option *FEM solver (fast)* in the form, `Evaluator` in the settings file. Records: [FEM_SURUM_KAYITLARI.md](FEM_SURUM_KAYITLARI.md).
+>
 > The text below describes the inherited features.
 
 Discrete sizing optimization of 3D steel frames with optional concrete-encased composite columns. The program drives

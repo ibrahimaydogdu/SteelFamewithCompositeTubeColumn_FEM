@@ -628,6 +628,7 @@ powershell -ExecutionPolicy Bypass -File tools\RunBatch.ps1 -Runs D:\Kosular\lis
 | MaxAnalyses, MemorySize, Seed | analiz bütçesi, popülasyon, tohum |
 | Transition | hibritte `PerStack` / `PerGroup` (isteğe bağlı) |
 | AbcLimit | ABC terk sınırı (isteğe bağlı) |
+| Evaluator | `Fem` (varsayılan: kendi FEM çözücüsü, final ETABS ile doğrulanır) / `Etabs` (her aday ETABS'te); isteğe bağlı |
 | Config | bu koşu için `App.config` değerleri: `Anahtar=değer;Anahtar2=değer2`, örn. `SeismicDriftAmplification=5.5;UpperBoundMultiplier=1`. Doluysa koşuya kendi exe kopyası verilir (`<Out>\<Name>in`); boşsa `-Exe` klasörü ortak kullanılır |
 
 - Her koşu `<Out>\<Name>` klasöründe modelin **kopyasıyla** çalışır; orijinal model değişmez. `ErrorLog.txt`, sonuç, Excel ve `_best.EDB` dosyaları da bu klasöre yazılır. Betiğin kendi günlüğü `<Out>unner.log`.
