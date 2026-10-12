@@ -8,6 +8,77 @@ Partial Public Class ETABS_Class
     Private Backend As IStructureEvaluator          'evaluator of the optimization
     Private EtabsBackend As EtabsEvaluator          'always available: initial design with the auto select lists, final check
 
+    Public ReadOnly Property UsesFem As Boolean
+        Get
+            Return TypeOf Backend Is FemBackend
+        End Get
+    End Property
+
+    'Final check of the best design found with the FEM evaluator: from now on ETABS evaluates (the analysis of the last FEM design is not valid)
+    Public Sub SwitchToEtabs()
+        If Not UsesFem Then Return
+        Backend = EtabsBackend
+        InvalidateAnalysis()
+        Errorlogprint("Info: final check of the best design with ETABS (evaluator switched from FEM to ETABS)")
+    End Sub
+
+    'The cheapest designs that the FEM evaluator found feasible (distinct design vectors, repaired): the final stage checks them with ETABS
+    'in cost order and takes the first that passes (the best FEM design can be slightly infeasible in ETABS: FEM D/C ratios are 0.4-2.4 % lower)
+    Private ReadOnly Archive As New List(Of OptimizationStructure_.Member_)
+    Private ReadOnly ArchiveKeys As New HashSet(Of String)
+    Private ReadOnly ArchiveSize As Integer = CInt(ReadNumber("FemArchiveSize", 20))
+
+    Friend Sub ArchiveFeasible(ByVal Member As OptimizationStructure_.Member_)
+        If Not UsesFem OrElse Member.Penalty > 0 OrElse Member.DesignVariables Is Nothing Then Return
+        Dim Key As String = String.Join(",", Member.DesignVariables)
+        If ArchiveKeys.Contains(Key) Then Return
+        If Archive.Count >= ArchiveSize AndAlso Member.CostValue >= Archive(Archive.Count - 1).CostValue Then Return
+        Dim Copy As OptimizationStructure_.Member_ = Member
+        Copy.DesignVariables = CType(Member.DesignVariables.Clone(), Integer())
+        Dim At As Integer = Archive.FindIndex(Function(m) m.CostValue > Copy.CostValue)
+        If At < 0 Then Archive.Add(Copy) Else Archive.Insert(At, Copy)
+        ArchiveKeys.Add(Key)
+        If Archive.Count > ArchiveSize Then
+            ArchiveKeys.Remove(String.Join(",", Archive(Archive.Count - 1).DesignVariables))
+            Archive.RemoveAt(Archive.Count - 1)
+        End If
+    End Sub
+
+    'Candidates for the final ETABS check: the archive, cheapest first
+    Public Function FeasibleArchive() As List(Of OptimizationStructure_.Member_)
+        Return Archive.ToList()
+    End Function
+
+    'ETABS guard of a design found with the FEM evaluator: the variables whose group ratio, story drift or beam/column ratio violates the
+    'limits in the ETABS analysis move to larger sections (the steps of the repair rules, at least one position), then the geometric
+    'constraints are repaired. Returns the number of changed variables.
+    Public Function StepUpViolations(ByRef Vec() As Integer) As Integer
+        Dim Sect_Ind() As Integer = GroupVector(Vec)
+        Dim Steps() As Integer = RepairSteps()
+        Dim Before() As Integer = CType(Sect_Ind.Clone(), Integer())
+        For v = 0 To Sect_Ind.Length - 1
+            Dim Violates As Boolean = Groups(SteelFrameDesignGroupIDs(v)).PMMRatio > 1 OrElse Steps(v) > 0
+            If Not Violates Then Continue For
+            'next section(s) of the catalog that is at least as stiff and strong about the major axis as the current one (the next section by area
+            'can be less deep)
+            Dim Cur As Integer = Sect_Ind(v)
+            Dim First As Integer = Math.Min(Cur + Math.Max(Steps(v), 1), GUb(v))
+            For k = First To GUb(v)
+                If WSections(k).Imajor >= WSections(Cur).Imajor AndAlso WSections(k).PlasticModulusMajor >= WSections(Cur).PlasticModulusMajor Then Sect_Ind(v) = k : Exit For
+            Next
+        Next
+        E1_Modifier_Geometric(Sect_Ind)
+        Dim Changed As Integer = 0
+        For v = 0 To Sect_Ind.Length - 1
+            If Sect_Ind(v) <> Before(v) Then
+                Changed += 1
+                Errorlogprint("Info: ETABS guard, group " & Groups(SteelFrameDesignGroupIDs(v)).GroupName & ": " & SecName(v, Before(v)) & " -> " & SecName(v, Sect_Ind(v)))
+            End If
+        Next
+        If Sect_Ind IsNot Vec Then EncodeHybrid(Sect_Ind, Vec)
+        Return Changed
+    End Function
+
     Public ReadOnly Property EvaluatorName As String
         Get
             Return If(Backend Is Nothing, "ETABS", Backend.Name)
@@ -187,6 +258,8 @@ Partial Public Class ETABS_Class
         Private Designed As Boolean
         Private MissingCases As New HashSet(Of String)
         Public Description As String
+        'FEM D/C ratios are 0.4-2.4 % below the ETABS ratios on average (measured on P4): App.config FemRatioMargin multiplies them (default 1.0)
+        Private ReadOnly RatioMargin As Double = ReadNumber("FemRatioMargin", 1.0)
 
         Public ReadOnly Property Name As String Implements IStructureEvaluator.Name
             Get
@@ -388,7 +461,7 @@ Partial Public Class ETABS_Class
                         Dim BCr As Double = If(O.SCWBActive AndAlso Not Bad, Math.Max(Current.BCMajor(e), Current.BCMinor(e)), 0.0)
                         Dim BCBad As Boolean = BCr > 1.0       'beam/column capacity error
                         'ETABS gives no ratio to a member with a design error (not seismically compact, Lb/ry, beam/column capacity)
-                        If Not Bad AndAlso Not BCBad Then GD.MaxRatio = Math.Max(GD.MaxRatio, Math.Max(m.PMM, Math.Max(m.VMaj, m.VMin)))
+                        If Not Bad AndAlso Not BCBad Then GD.MaxRatio = Math.Max(GD.MaxRatio, RatioMargin * Math.Max(m.PMM, Math.Max(m.VMaj, m.VMin)))
                         If O.SCWBActive Then
                             GD.BCRatio = Math.Max(GD.BCRatio, BCr)
                             If Bad Then GD.ErrorCount += 1

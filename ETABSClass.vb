@@ -1530,6 +1530,7 @@ Partial Public Class ETABS_Class
         If Key IsNot Nothing AndAlso Cache.TryGetValue(Key, Hit) Then
             Member.DesignVariables = CType(Hit.DesignVariables.Clone(), Integer())
             Member.CostValue = Hit.CostValue : Member.Penalty = Hit.Penalty : Member.PenalizedCost = Hit.PenalizedCost
+            ArchiveFeasible(Member)
             Clock("CacheHit")
             ret = 0
             Return
@@ -1541,6 +1542,7 @@ Partial Public Class ETABS_Class
             Total.Stop()
         End Try
         iter_ = Iter
+        If ret = 0 Then ArchiveFeasible(Member)
         If Key IsNot Nothing AndAlso ret = 0 Then
             Dim Result As New OptimizationStructure_.Member_ With {.DesignVariables = CType(Member.DesignVariables.Clone(), Integer()),
                 .CostValue = Member.CostValue, .Penalty = Member.Penalty, .PenalizedCost = Member.PenalizedCost}

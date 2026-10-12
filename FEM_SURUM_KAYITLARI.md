@@ -126,3 +126,27 @@ Bu biçimle sonuçlar: P4 statik (varsayılan ve rastgele kesitler): yerdeğişt
 **Kesit sıkılığı + Lb/ry (5 tohum × 84 eleman):** Lb/ry 412/414 uyumlu (2 sınır durumu FEM tarafı muhafazakâr: W16X31 kirişi). Sismik kompaktlık: moment çerçevesi elemanlarına uygulanır (mafsallı kirişler hariç); ETABS'in sınır durumdaki kolonları (Ca≈0.11–0.14) işaretlemesi için Ca'ya `CaCalibration=1.25` katsayısı; kalan fark 2/84 (sınır durumu, yalnız tohum 7).
 
 **Kapsam dışı:** ContPl/DoublePl (süreklilik/ikiz levha) — optimizasyonu etkilemiyor.
+
+## Aşama F6a–F6b — optimizatöre entegrasyon (yerel, 2026-10-12)
+
+**Mimari:** `StructureEvaluator.vb` (`IStructureEvaluator`: kesit atama, analiz, düğüm yer değiştirmeleri, çelik tasarım oranları) ve `ETABSClass.Backends.vb`: `EtabsEvaluator` (mevcut ETABS kodu aynen, arayüzün arkasına alındı) ve `FemBackend` (FemCore'u kullanır). Onarım adımları, kısıtlar, ceza ve 16 yöntem aynı kaldı; yalnız dört ETABS çağrısı (E2 kesit atama, E3 analiz, JointDispl, tasarım özeti) arayüze bağlandı. Seçim: `App.config` → `Evaluator = Etabs | Fem` (config değeri ortam değişkenini geçersiz kılar). FEM'in işleyemediği model (kompozit/hibrit kolon, alan elemanı, Check Structure) otomatik ETABS'e döner ve ErrorLog'a nedeni yazılır. Model bir kez ETABS'ten okunur (`EtabsReader`, FemTool ile paylaşılan dosya); ETABS yalnızca başlangıçtaki otomatik seçim listesi tasarımı ve final doğrulama için çalışır.
+**Final doğrulama (F6b):** `Opt_Finalize`: en iyi tasarım önce FEM'de yeniden değerlendirilir (log: "best design, FEM …"), sonra değerlendirici ETABS'e geçer (`SwitchToEtabs`), tüm analiz durumlarıyla, onarımsız analiz edilir (DAM durumunda, tasarım sonrası ETABS analizi) ve `_best.EDB` kaydedilir. ETABS cezası > 0 ise **guard**: ihlal eden grupların kesitleri (onarım adımı kuralları, en az 1 konum) büyütülür, geometrik kısıtlar onarılır, ETABS'te yeniden analiz edilir (en çok 6 adım). Sonuç `FinalCheck` ve rapora ETABS değerleriyle yazılır.
+
+**Hız (8 çekirdek):**
+| Model | ETABS (değerlendirme) | FEM | Not |
+|---|---|---|---|
+| P4 (84 eleman) | 13,7 s | **0,15 s** | analiz 45 ms + tasarım 100 ms |
+| 525M (525 eleman, 3–4 P-Δ'lı kombinasyon) | 40–50 s | **0,35–0,45 s** | analiz 45–90 ms, tasarım + doğrusal olmayan çözümler 300–400 ms |
+Neler: profil (skyline) Cholesky + ters Cuthill-McKee numaralandırma (yoğun 1350² çözümünden 7–9 ms); eleman zincirleri (`Parallel.For`) ve tasarım paralel; zincir inşasında MathNet yerine küçük yoğun çözücüler; P-Δ yinelemesi doğrusal çözümün eksenel kuvvetinden başlar; modal çözücü Solve'un çarpanını paylaşır; `gcServer` (zincir inşası 2,4 kat hızlandı).
+
+**Doğruluk (P4, aynı tasarımlar iki değerlendiricide):**
+| Büyüklük | FEM − ETABS |
+|---|---|
+| Kat ve tepe ötelemesi (80 değer) | ortalama +0,51 %, %95: +1,8 %, en büyük +3,4 % |
+| Yakın uygun tasarımlar (f0.7, f0.9) ceza | 1,801 / 1,789 ve 1,429 / 1,439 (≤ %1) |
+| SCWB oranı (220 değer, ETABS dolu olanlar) | ortalama +%4,0 (FEM yüksek), %95: +%10,8, en büyük +%15,8 |
+| Final tasarım cezası (16 yöntemin en iyileri) | FEM'in uygun saydığı 6 tasarımın 5'i ETABS'te de uygun; biri ETABS'te %1 üzerinde (D/C 1,010); uygun olmayanlarda FEM cezası ETABS'in %1–3'ü kadar altında (bir tanesinde %14: D/C 1,204 / 1,233) |
+- ETABS ve FEM değerlendiricileri aynı tasarımlarda **birebir** aynı değerleri veriyor mu: ETABS yolu özgün programla karşılaştırıldı (2 tasarım): maliyet, ceza, tüm kısıt ve grup oranları aynı.
+- **Bilinen farklar:** (1) ETABS, kendi tasarım hatası olan elemanda oranı 0 verir ve BC'yi boş bırakır (uygulandı: hatalı eleman oranı 0, BC 0). (2) ETABS bazı sütunlarda (~%25, kural bulunamadı) BC'yi hiç vermiyor; FEM bir değer verir (genelde muhafazakâr). (3) FEM sismik kompaktlık hatasını ETABS'ten ~%6 fazla işaretler, ETABS'in işaretlediği hiçbirini kaçırmaz (672 eleman: 192 ikisi de, 38 yalnız FEM, 0 yalnız ETABS). (4) D/C oranları FEM'de ortalama %0,4–2,4 düşük: `FemRatioMargin` (App.config, varsayılan 1,0) ile çarpan eklenebilir.
+
+**Tüm yöntemler (P4, SSO dışında 15 yöntem + SSO, 400 analiz, bellek 30, tohum 7):** hepsi çalıştı; yöntem başına 47–58 s (400+ analiz, 0,12 s/analiz). Tam SSO koşusu (1536 analiz, bellek 30): toplam 3 dk 35 sn (ETABS ile ≈ 5,5 saat). En iyi tasarım: FEM cezası 0, ETABS cezası 0, maliyet 550,66; `_best.EDB` kaydedildi.

@@ -418,6 +418,8 @@ Partial Public Class OptimizationClass
         End If
     End Sub
     Private Const ETABS_GUARD_STEPS As Integer = 3
+    Private Const FEM_GUARD_STEPS As Integer = 6
+    Private Const FEM_CANDIDATES As Integer = 10
 
     Public Sub Opt_Finalize()
         Dim ret As Integer = 0
@@ -437,10 +439,67 @@ Partial Public Class OptimizationClass
             If ret <> 0 Then LogError("Problem occurred in :RestoreRunCases")
             Dim Final As OptimizationStructure_.Member_ = GlobalBest
             Final.DesignVariables = CType(GlobalBest.DesignVariables.Clone(), Integer())
+            Dim FemUsed As Boolean = ETABSModel.UsesFem
+            Dim FemPenalty As Double = GlobalBest.Penalty
+            If FemUsed Then
+                'constraint values of the best design in the FEM evaluator (next to the ETABS values of the final check in the log)
+                Dim FemCheck As OptimizationStructure_.Member_ = GlobalBest
+                FemCheck.DesignVariables = CType(GlobalBest.DesignVariables.Clone(), Integer())
+                ETABSModel.Evaluate(FemCheck, iter, ret, applyRepair:=False)
+                If ret = 0 Then
+                    For Each c In ETABSModel.ConstraintSummary()
+                        LogError("Info: best design, FEM " & c)
+                    Next
+                End If
+                ret = 0
+                ETABSModel.SwitchToEtabs()
+            End If
             If ret = 0 Then ETABSModel.Evaluate(Final, iter, ret, applyRepair:=False)
             If ret <> 0 Then
                 LogError("Problem occurred in :Evaluate (final analysis)")
             Else
+                If FemUsed Then
+                    LogError("Info: best design, FEM penalty " & FemPenalty.ToString("G4") & ", ETABS penalty " & Final.Penalty.ToString("G4") & ", cost " & Final.CostValue.ToString("F2"))
+                    'the best FEM design is slightly infeasible in ETABS: the next cheapest designs that the FEM evaluator found feasible are checked
+                    'with ETABS (cost order), the first that passes is the final design
+                    If Final.Penalty > 0 Then
+                        Dim Tried As Integer = 0
+                        Dim BestFail As OptimizationStructure_.Member_ = Final
+                        For Each Cand In ETABSModel.FeasibleArchive()
+                            If String.Join(",", Cand.DesignVariables) = String.Join(",", GlobalBest.DesignVariables) Then Continue For
+                            If Cand.CostValue < GlobalBest.CostValue Then Continue For
+                            Tried += 1
+                            If Tried > FEM_CANDIDATES Then Exit For
+                            ETABS_Class.Report("ETABS check of the next feasible FEM design (" & Tried & ")")
+                            Dim Check As OptimizationStructure_.Member_ = Cand
+                            Check.DesignVariables = CType(Cand.DesignVariables.Clone(), Integer())
+                            ETABSModel.Evaluate(Check, iter, ret, applyRepair:=False)
+                            If ret <> 0 Then : LogError("Problem occurred in :Evaluate (next FEM candidate)") : Exit For : End If
+                            LogError("Info: ETABS check of the FEM design " & Tried & " (cost order), cost " & Check.CostValue.ToString("F2") & ", penalty " & Check.Penalty.ToString("G4"))
+                            If Check.Penalty < BestFail.Penalty Then BestFail = Check
+                            If Check.Penalty <= 0 Then Final = Check : Exit For
+                        Next
+                        If Final.Penalty > 0 AndAlso BestFail.Penalty < Final.Penalty Then Final = BestFail
+                        ret = 0
+                        If Final.Penalty > 0 Then
+                            'none passed: the design with the smallest penalty is re-analysed with ETABS (state of the guard) and corrected
+                            ETABSModel.Evaluate(Final, iter, ret, applyRepair:=False)
+                        End If
+                    End If
+                    'ETABS guard: constraints violated in the ETABS analysis -> larger sections of the violating groups, analysed again with ETABS
+                    For Guard = 1 To FEM_GUARD_STEPS
+                        If Final.Penalty <= 0 Then Exit For
+                        Dim Vars() As Integer = CType(Final.DesignVariables.Clone(), Integer())
+                        If ETABSModel.StepUpViolations(Vars) = 0 Then Exit For
+                        ETABS_Class.Report("ETABS guard step " & Guard & ": larger sections where the ETABS check of the FEM design is violated")
+                        Dim Guarded As OptimizationStructure_.Member_ = Final
+                        Guarded.DesignVariables = Vars
+                        ETABSModel.Evaluate(Guarded, iter, ret, applyRepair:=False)
+                        If ret <> 0 Then : LogError("Problem occurred in :Evaluate (ETABS guard of the FEM design)") : Exit For : End If
+                        Final = Guarded
+                        LogError("Info: ETABS guard step " & Guard & " (FEM design), cost " & Final.CostValue.ToString("F2") & ", penalty " & Final.Penalty.ToString("G4"))
+                    Next
+                End If
                 FinalCheck = Final
                 FinalConstraints = ETABSModel.ConstraintSummary()
                 For Each c In FinalConstraints
