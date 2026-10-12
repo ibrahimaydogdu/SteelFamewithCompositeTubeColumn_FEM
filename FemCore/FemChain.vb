@@ -81,7 +81,7 @@ Public Module FemChain
         For p = 0 To NPat - 1 : JointLoad(p) = New Double(11) {} : Next
 
         'segments: (x0, x1, dof maps, releases)
-        Dim Sec As FemSection = EffectiveSection(E, AxialFactor, FlexuralFactor)
+        Dim Sec As FemSection = If(E.Section.NoDesign, EffectiveSection(E, 1.0, 1.0), EffectiveSection(E, AxialFactor, FlexuralFactor))     'the DAM reduction belongs to the steel design: composite sections keep their stiffness
         Dim ClearRel = New List(Of Integer)
         For i = 0 To 5
             If E.ReleaseI(i) Then ClearRel.Add(i)

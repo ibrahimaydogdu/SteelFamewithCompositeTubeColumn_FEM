@@ -2297,39 +2297,26 @@ Partial Public Class ETABS_Class
     '_______________________________________________________________________________________________
     'Encased composite columns: AISC 360-16 / 360-22 check with the frame forces of the strength combinations
     Private Function G1_2_ConsComposite() As Integer
-        Dim ret As Integer = SelectOutput(New String() {}, ComboNames.DesignSteelStrength)
-        If (ret <> 0) Then Return ret
+        Dim ret As Integer = 0
         ETABS_print.CompositeRatios = New List(Of Double)
         For v = 0 To SteelFrameDesignGroupIDs.Count - 1
             Dim ID As Integer = SteelFrameDesignGroupIDs(v)
             If Not Groups(ID).IsComposite Then Continue For
-            Dim NumberResults As Integer
-            Dim Obj() As String = Nothing, Elm() As String = Nothing, LoadCase() As String = Nothing, StepType() As String = Nothing
-            Dim ObjSta() As Double = Nothing, ElmSta() As Double = Nothing, StepNum() As Double = Nothing
-            Dim P() As Double = Nothing, V2() As Double = Nothing, V3() As Double = Nothing, T() As Double = Nothing, M2() As Double = Nothing, M3() As Double = Nothing
-            ret = SapModel.Results.FrameForce(Groups(ID).GroupName, ETABSv1.eItemTypeElm.GroupElm, NumberResults, Obj, ObjSta, Elm, ElmSta, LoadCase, StepType, StepNum, P, V2, V3, T, M2, M3)
-            If (ret <> 0) Then : Errorlogprint("Problem occurred on :Results.FrameForce " & Groups(ID).GroupName) : Return ret : End If
-            If NumberResults = 0 Then : Errorlogprint("No frame forces for composite group " & Groups(ID).GroupName) : Return -1 : End If
-
-            'one block = one frame object under one combination / step
-            Dim Blocks As New Dictionary(Of String, List(Of Integer))
-            For k = 0 To NumberResults - 1
-                Dim key As String = Obj(k) & "|" & LoadCase(k) & "|" & StepType(k) & "|" & StepNum(k)
-                If Not Blocks.ContainsKey(key) Then Blocks(key) = New List(Of Integer)
-                Blocks(key).Add(k)
-            Next
-            Dim SecID As Integer = If(Assigned IsNot Nothing AndAlso Assigned(v) >= 0, Assigned(v), CompositeSectionID(Groups(ID).GroupName))
+            Dim Blocks As New List(Of ForceBlock)
+            ret = Backend.ReadFrameForces(Groups(ID).GroupName, Blocks)
+            If (ret <> 0) Then : Errorlogprint("Problem occurred on :ReadFrameForces " & Groups(ID).GroupName) : Return ret : End If
+            If Blocks.Count = 0 Then : Errorlogprint("No frame forces for composite group " & Groups(ID).GroupName) : Return -1 : End If
+            Dim Current As Integer = If(UsesFem AndAlso FemVector IsNot Nothing, FemVector(v), If(Assigned IsNot Nothing AndAlso Assigned(v) >= 0, Assigned(v), -1))
+            Dim SecID As Integer = If(Current >= 0, Current, CompositeSectionID(Groups(ID).GroupName))
             If SecID < 0 Then : Errorlogprint("Composite section of group " & Groups(ID).GroupName & " not found") : Return -1 : End If
             Dim Detailing As Double = CompositeSec(SecID).DetailingRatio()
             Dim Strength As Double = 0
-            For Each Block In Blocks.Values
-                Dim ks = Block.OrderBy(Function(k) ObjSta(k)).ToList()
-                Dim Check As CompositeMemberCheck = MemberCheck(SecID, Frames(FrameIndex(Obj(ks(0)))).FrameLength)
-                Dim kP As Integer = ks.OrderByDescending(Function(k) Math.Abs(P(k))).First()
+            For Each Block In Blocks
+                Dim Check As CompositeMemberCheck = MemberCheck(SecID, Frames(FrameIndex(Block.Frame)).FrameLength)
+                Dim kP As Integer = Enumerable.Range(0, Block.P.Length).OrderByDescending(Function(k) Math.Abs(Block.P(k))).First()
                 Dim PMM, Shear As Double
-                Dim r As Double = Check.Ratio(P(kP), ks.Select(Function(k) M3(k)).ToArray(), ks.Select(Function(k) M2(k)).ToArray(),
-                                              ks.Max(Function(k) Math.Abs(V2(k))), ks.Max(Function(k) Math.Abs(V3(k))), PMM, Shear,
-                                              ks.Max(Function(k) Math.Abs(T(k))))
+                Dim r As Double = Check.Ratio(Block.P(kP), Block.M3, Block.M2, Block.V2.Max(Function(x) Math.Abs(x)), Block.V3.Max(Function(x) Math.Abs(x)), PMM, Shear,
+                                              Block.T.Max(Function(x) Math.Abs(x)))
                 Strength = Math.Max(Strength, r)
             Next
             Strength *= CompositeStrengthFactor
@@ -2339,6 +2326,31 @@ Partial Public Class ETABS_Class
             Groups(ID).PMMRatio = GroupRatio
             ETABS_print.CompositeRatios.Add(GroupRatio)
         Next v
+        Return ret
+    End Function
+
+    'ETABS: frame forces of the strength combinations of one group
+    Friend Function EtabsFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer
+        Dim ret As Integer = SelectOutput(New String() {}, ComboNames.DesignSteelStrength)
+        If (ret <> 0) Then Return ret
+        Dim NumberResults As Integer
+        Dim Obj() As String = Nothing, Elm() As String = Nothing, LoadCase() As String = Nothing, StepType() As String = Nothing
+        Dim ObjSta() As Double = Nothing, ElmSta() As Double = Nothing, StepNum() As Double = Nothing
+        Dim P() As Double = Nothing, V2() As Double = Nothing, V3() As Double = Nothing, T() As Double = Nothing, M2() As Double = Nothing, M3() As Double = Nothing
+        ret = SapModel.Results.FrameForce(Group, ETABSv1.eItemTypeElm.GroupElm, NumberResults, Obj, ObjSta, Elm, ElmSta, LoadCase, StepType, StepNum, P, V2, V3, T, M2, M3)
+        If (ret <> 0) Then : Errorlogprint("Problem occurred on :Results.FrameForce " & Group) : Return ret : End If
+        'one block = one frame object under one combination / step
+        Dim Keys As New Dictionary(Of String, List(Of Integer))
+        For k = 0 To NumberResults - 1
+            Dim key As String = Obj(k) & "|" & LoadCase(k) & "|" & StepType(k) & "|" & StepNum(k)
+            If Not Keys.ContainsKey(key) Then Keys(key) = New List(Of Integer)
+            Keys(key).Add(k)
+        Next
+        For Each Items In Keys.Values
+            Dim ks = Items.OrderBy(Function(k) ObjSta(k)).ToList()
+            Blocks.Add(New ForceBlock With {.Frame = Obj(ks(0)), .P = ks.Select(Function(k) P(k)).ToArray(), .V2 = ks.Select(Function(k) V2(k)).ToArray(), .V3 = ks.Select(Function(k) V3(k)).ToArray(),
+                                            .T = ks.Select(Function(k) T(k)).ToArray(), .M2 = ks.Select(Function(k) M2(k)).ToArray(), .M3 = ks.Select(Function(k) M3(k)).ToArray()})
+        Next
         Return ret
     End Function
 

@@ -165,6 +165,7 @@ Partial Public Class FemStatic
         Dim E = M.Elements(ei)
         Dim S = E.Section
         Dim Res As New MemberRatios
+        If S.NoDesign Then Return Res
         Dim Lc As Double = ClearLength(E)
         Dim xs() As Double = StationLocations(ei)
         Dim LMaj As Double = If(E.UnbracedMajor > 0, E.UnbracedMajor, Lc), LMin As Double = If(E.UnbracedMinor > 0, E.UnbracedMinor, Lc), LLtb As Double = If(E.UnbracedLTB > 0, E.UnbracedLTB, Lc)

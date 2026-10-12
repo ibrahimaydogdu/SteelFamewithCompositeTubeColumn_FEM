@@ -17,6 +17,12 @@ Public Structure DispRow
     Public U2 As Double
 End Structure
 
+'Internal forces of one frame under one combination / step (stations ascending; kN, mm; axial force tension positive)
+Public Class ForceBlock
+    Public Frame As String
+    Public P(), V2(), V3(), T(), M2(), M3() As Double
+End Class
+
 Public Interface IStructureEvaluator
     ReadOnly Property Name As String
     'Sections of the design variables (indices of the section catalog) to the structure
@@ -27,4 +33,6 @@ Public Interface IStructureEvaluator
     Function ReadDisplacements(ByVal Rows As List(Of DispRow)) As Integer
     'Steel design of the groups (key: group name)
     Function ReadSteelDesign(ByVal Result As Dictionary(Of String, GroupDesign)) As Integer
+    'Frame forces of the strength combinations for the composite column check (one block per frame and combination step)
+    Function ReadFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer
 End Interface

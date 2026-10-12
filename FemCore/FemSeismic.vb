@@ -28,7 +28,7 @@ Partial Public Class FemStatic
         Next
         For ci = 0 To ne - 1
             Dim col = M.Elements(ci)
-            If Not IsCol(col) Then Continue For
+            If Not IsCol(col) OrElse col.Section.NoDesign Then Continue For
             Dim top As Integer = If(M.Nodes(col.NI).Z > M.Nodes(col.NJ).Z, col.NI, col.NJ)
             Dim above As Integer = -1
             For Each ei In Attached(top)
@@ -36,7 +36,7 @@ Partial Public Class FemStatic
                 If ei <> ci AndAlso IsCol(e) AndAlso M.Nodes(If(e.NI = top, e.NJ, e.NI)).Z > M.Nodes(top).Z Then above = ei
             Next
             Me.Above(ci) = above
-            If above < 0 Then Continue For
+            If above < 0 OrElse M.Elements(above).Section.NoDesign Then Continue For
             Dim ab = M.Elements(above)
             For plane = 0 To 1                                   '0 = major (axis 2 of the column in the plane), 1 = minor
                 Dim sumB As Double = 0, nB As Integer = 0

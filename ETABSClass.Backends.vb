@@ -8,6 +8,8 @@ Partial Public Class ETABS_Class
     Private Backend As IStructureEvaluator          'evaluator of the optimization
     Private EtabsBackend As EtabsEvaluator          'always available: initial design with the auto select lists, final check
 
+    Friend FemVector() As Integer           'design vector of the last FEM analysis (composite check: section of every variable)
+
     Public ReadOnly Property UsesFem As Boolean
         Get
             Return TypeOf Backend Is FemBackend
@@ -17,6 +19,7 @@ Partial Public Class ETABS_Class
     'Final check of the best design found with the FEM evaluator: from now on ETABS evaluates (the analysis of the last FEM design is not valid)
     Public Sub SwitchToEtabs()
         If Not UsesFem Then Return
+        ForgetAssignedSections()        'ETABS never received the sections of the FEM designs
         Backend = EtabsBackend
         InvalidateAnalysis()
         Errorlogprint("Info: final check of the best design with ETABS (evaluator switched from FEM to ETABS)")
@@ -64,7 +67,7 @@ Partial Public Class ETABS_Class
             Dim Cur As Integer = Sect_Ind(v)
             Dim First As Integer = Math.Min(Cur + Math.Max(Steps(v), 1), GUb(v))
             For k = First To GUb(v)
-                If WSections(k).Imajor >= WSections(Cur).Imajor AndAlso WSections(k).PlasticModulusMajor >= WSections(Cur).PlasticModulusMajor Then Sect_Ind(v) = k : Exit For
+                If WSections(k).Imajor >= WSections(Cur).Imajor AndAlso WSections(k).PlasticModulusMajor >= WSections(Cur).PlasticModulusMajor AndAlso GeometryFits(v, k, Sect_Ind) AndAlso IsDuctile(v, k) Then Sect_Ind(v) = k : Exit For
             Next
         Next
         E1_Modifier_Geometric(Sect_Ind)
@@ -75,6 +78,12 @@ Partial Public Class ETABS_Class
                 Errorlogprint("Info: ETABS guard, group " & Groups(SteelFrameDesignGroupIDs(v)).GroupName & ": " & SecName(v, Before(v)) & " -> " & SecName(v, Sect_Ind(v)))
             End If
         Next
+        If Changed = 0 Then
+            For v = 0 To Sect_Ind.Length - 1
+                Dim Gr = Groups(SteelFrameDesignGroupIDs(v))
+                If Gr.PMMRatio > 1 OrElse Steps(v) > 0 Then Errorlogprint("Info: ETABS guard: group " & Gr.GroupName & " (" & SecName(v, Sect_Ind(v)) & ", ratio " & Gr.PMMRatio.ToString("F3", CultureInfo.InvariantCulture) & ", steps " & Steps(v) & ") cannot be enlarged: upper bound " & SecName(v, GUb(v)) & " or geometric constraint")
+            Next
+        End If
         If Sect_Ind IsNot Vec Then EncodeHybrid(Sect_Ind, Vec)
         Return Changed
     End Function
@@ -133,6 +142,10 @@ Partial Public Class ETABS_Class
 
         Public Function ReadSteelDesign(ByVal Result As Dictionary(Of String, GroupDesign)) As Integer Implements IStructureEvaluator.ReadSteelDesign
             Return O.EtabsSteelDesign(Result, UpdateSections)
+        End Function
+
+        Public Function ReadFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer Implements IStructureEvaluator.ReadFrameForces
+            Return O.EtabsFrameForces(Group, Blocks)
         End Function
     End Class
 
@@ -281,7 +294,6 @@ Partial Public Class ETABS_Class
 
         'Nothing (Reason): the model or the settings cannot be handled by the own solver
         Public Shared Function TryCreate(ByVal Owner As ETABS_Class, ByRef Reason As String) As FemBackend
-            If Owner.FormInfo.CompositeColumns Then Reason = "composite columns are not available in the FEM evaluator yet" : Return Nothing
             If Owner.FormInfo.CheckStructure Then Reason = "Check Structure always uses ETABS" : Return Nothing
             Try
                 Dim Units As ETABSv1.eUnits = Owner.SapModel.GetPresentUnits()
@@ -366,13 +378,31 @@ Partial Public Class ETABS_Class
             Return String.Format(CultureInfo.InvariantCulture, "{0}|Ca0 {1:0.0000}|Cacrit {2:0.0000}|flange {3:0.000}|lb {4:0.000}|relI {5}|relJ {6}|beams {7}/{8}|{9}", If(isCol, "col", "beam"), Ca, crit, fr, lr, rel(el.ReleaseI), rel(el.ReleaseJ), nbm, nb, el.Group)
         End Function
 
+        'FemSection of a composite column section: the ETABS General section (steel material, concrete transformed to steel); no steel design
+        Private ReadOnly CompositeSections As New Dictionary(Of Integer, FemSection)
+        Private Function CompositeSectionOf(ByVal Index As Integer) As FemSection
+            Dim S As FemSection = Nothing
+            If CompositeSections.TryGetValue(Index, S) Then Return S
+            Dim T As TransformedSection_ = O.CompositeSec(Index).Transformed()
+            S = New FemSection With {.Name = O.CompositeSectionName(Index), .MaterialName = Template.MaterialName, .E = Template.E, .G = Template.G,
+                .UnitWeight = Template.UnitWeight, .UnitMass = Template.UnitMass, .Fy = Template.Fy, .Fu = Template.Fu, .NoDesign = True,
+                .Depth = T.T3 / 1000, .Width = T.T2 / 1000, .A = T.Area / 1000000, .As2 = T.As2 / 1000000, .As3 = T.As3 / 1000000, .J = T.J / 1.0E+12,
+                .I22 = T.I22 / 1.0E+12, .I33 = T.I33 / 1.0E+12, .S22 = T.S22 / 1.0E+9, .S33 = T.S33 / 1.0E+9, .Z22 = T.Z22 / 1.0E+9, .Z33 = T.Z33 / 1.0E+9,
+                .R22 = T.R22 / 1000, .R33 = T.R33 / 1000}
+            S.Modifier(6) = T.WeightModifier : S.Modifier(7) = T.WeightModifier
+            CompositeSections(Index) = S
+            Return S
+        End Function
+
         Public Function AssignSections(ByVal Sect_Ind() As Integer) As Integer Implements IStructureEvaluator.AssignSections
             Dim c = O.Clock("SetSection") : c.Start()
             Try
                 For i = 0 To O.SteelFrameDesignGroupIDs.Count - 1
-                    Dim G As String = O.Groups(O.SteelFrameDesignGroupIDs(i)).GroupName
-                    Fem.AssignSection(GroupElements(G), SectionOf(Sect_Ind(i)))
+                    Dim ID As Integer = O.SteelFrameDesignGroupIDs(i)
+                    Dim G As String = O.Groups(ID).GroupName
+                    Fem.AssignSection(GroupElements(G), If(O.CompositeActive AndAlso O.Groups(ID).IsComposite, CompositeSectionOf(Sect_Ind(i)), SectionOf(Sect_Ind(i))))
                 Next
+                O.FemVector = CType(Sect_Ind.Clone(), Integer())
                 O.Iter += 1
             Finally
                 c.Stop()
@@ -433,6 +463,22 @@ Partial Public Class ETABS_Class
             Return 0
         End Function
 
+        Public Function ReadFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer Implements IStructureEvaluator.ReadFrameForces
+            If Current.Failed Then O.AnalysisFailed = True : Return 0
+            Dim Xs() As Double = Nothing
+            For Each ei In GroupElements(Group)
+                For Each Set1 In Fem.CombinationForces(Current, ei, Xs)
+                    Dim n As Integer = Xs.Length
+                    Dim B As New ForceBlock With {.Frame = Model.Elements(ei).Name, .P = New Double(n - 1) {}, .V2 = New Double(n - 1) {}, .V3 = New Double(n - 1) {}, .T = New Double(n - 1) {}, .M2 = New Double(n - 1) {}, .M3 = New Double(n - 1) {}}
+                    For j = 0 To n - 1
+                        B.P(j) = Set1(j)(0) : B.V2(j) = Set1(j)(1) : B.V3(j) = Set1(j)(2) : B.T(j) = Set1(j)(3) * 1000 : B.M2(j) = Set1(j)(4) * 1000 : B.M3(j) = Set1(j)(5) * 1000
+                    Next
+                    Blocks.Add(B)
+                Next
+            Next
+            Return 0
+        End Function
+
         Public Function ReadSteelDesign(ByVal Result As Dictionary(Of String, GroupDesign)) As Integer Implements IStructureEvaluator.ReadSteelDesign
             Dim c = O.Clock("SteelDesign") : c.Start()
             Try
@@ -450,6 +496,7 @@ Partial Public Class ETABS_Class
                     IO.File.AppendAllLines(DumpFile, L)
                 End If
                 For Each Id In O.SteelFrameDesignGroupIDs
+                    If O.CompositeActive AndAlso O.Groups(Id).IsComposite Then Continue For
                     Dim G As String = O.Groups(Id).GroupName
                     Dim GD As New GroupDesign
                     For Each e In GroupElements(G)

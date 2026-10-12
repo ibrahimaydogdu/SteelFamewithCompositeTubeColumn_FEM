@@ -72,7 +72,7 @@ Public Class FemEvaluator
         Dim Res(Model.Elements.Count - 1) As Boolean
         For ei = 0 To Model.Elements.Count - 1
             Dim el = Model.Elements(ei)
-            If el.Section Is Nothing OrElse el.Section.A <= 0 Then Continue For
+            If el.Section Is Nothing OrElse el.Section.A <= 0 OrElse el.Section.NoDesign Then Continue For
             Dim isCol As Boolean = Math.Abs(el.Axes(0, 2)) > 0.9
             Dim moment As Boolean = isCol OrElse Not (el.ReleaseI(4) OrElse el.ReleaseI(5) OrElse el.ReleaseJ(4) OrElse el.ReleaseJ(5))
             If Not moment Then Continue For
@@ -139,6 +139,50 @@ Public Class FemEvaluator
         Catch ex As Exception
             Return New StaticResults With {.Failed = True, .Message = "case " & Cmb.Name & ": " & ex.Message}
         End Try
+    End Function
+
+    'Station forces (N tension +, V2, V3, T, M2, M3 per station; kN, m) of one member for all design combinations: one set for a static
+    'combination, two (static + RS, static - RS) for a combination with response spectrum cases. Xs: the stations.
+    Public Function CombinationForces(ByVal Ev As FemEvaluation, ByVal ei As Integer, ByRef Xs() As Double) As List(Of Double()())
+        Dim Res As New List(Of Double()())
+        Dim S As FemStatic = Ev.Solver
+        Xs = S.StationLocations(ei)
+        For Each cmb In Model.Combos.Where(Function(x) Model.DesignCombos.Contains(x.Name))
+            Dim Sf As Double()()
+            If cmb.Nonlinear Then
+                Dim T = NonlinearSolution(Ev, cmb)
+                If T.Item1.Failed Then Continue For
+                Sf = T.Item2.StationForces(T.Item1, 0, ei, Xs)
+                Res.Add(Sf)
+                Continue For
+            End If
+            Sf = New Double(Xs.Length - 1)() {}
+            For j = 0 To Xs.Length - 1 : Sf(j) = New Double(5) {} : Next
+            For Each t In cmb.Terms
+                Dim p As Integer = Model.PatternIndex(t.Name)
+                If p < 0 Then Continue For
+                Dim sp = S.StationForces(Ev.StaticRes, p, ei, Xs)
+                For j = 0 To Xs.Length - 1 : For c = 0 To 5 : Sf(j)(c) += t.Factor * sp(j)(c) : Next : Next
+            Next
+            If cmb.RSTerms.Count = 0 Then Res.Add(Sf) : Continue For
+            Dim Mag(Xs.Length - 1)() As Double
+            For j = 0 To Xs.Length - 1 : Mag(j) = New Double(5) {} : Next
+            For Each rt In cmb.RSTerms
+                Dim rr As RSResults = Nothing
+                If Not Ev.RS.TryGetValue(rt.Name, rr) Then Continue For
+                Dim sp = S.RSStationForces(rr, ei, Xs)
+                For j = 0 To Xs.Length - 1 : For c = 0 To 5 : Mag(j)(c) += Math.Abs(rt.Factor) * sp(j)(c) : Next : Next
+            Next
+            For Each sg In {1.0, -1.0}
+                Dim S2(Xs.Length - 1)() As Double
+                For j = 0 To Xs.Length - 1
+                    S2(j) = New Double(5) {}
+                    For c = 0 To 5 : S2(j)(c) = Sf(j)(c) + sg * Mag(j)(c) : Next
+                Next
+                Res.Add(S2)
+            Next
+        Next
+        Return Res
     End Function
 
     Public Function FindCombo(ByVal Name As String) As FemCombo

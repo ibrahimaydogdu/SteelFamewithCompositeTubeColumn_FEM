@@ -21,6 +21,7 @@ Public Class FemSection
     Public Depth, Width, FlangeThickness, WebThickness As Double    'm (I sections; design checks)
     Public Fy, Fu As Double                     'kN/m2
     Public S22, S33, Z22, Z33, R22, R33 As Double       'elastic and plastic moduli, radii of gyration
+    Public NoDesign As Boolean                  'not designed by the steel design (composite column: own check from the station forces)
     Public Fillet As Double                     'fillet radius (k = tf + r)
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'property modifiers: area, As2, As3, torsion, I22, I33, mass, weight
     Public ReadOnly Property WeightPerLength As Double
