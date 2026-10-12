@@ -1,4 +1,5 @@
 Imports MathNet.Numerics.LinearAlgebra
+Imports System.Threading.Tasks
 
 Public Class FemMassSource
     Public SelfMass As Boolean = True
@@ -44,37 +45,48 @@ End Class
 Partial Public Class FemStatic
     Public Const GravityAccel As Double = 9.80665
 
-    Private KRed As Double(,)
     Private ChainK() As ChainResult
     Private MassFull() As Double                                'lumped translational masses, 6 per node (only 0..2 used)
 
-    'Assemble the reduced stiffness matrix (no loads)
+    'Assemble and factorise the reduced stiffness matrix (no loads); Solve does it for the load cases and keeps the factor
     Private Sub AssembleStiffness()
         Dim ne As Integer = M.Elements.Count
-        ReDim KRed(NFree - 1, NFree - 1)
         ReDim ChainK(ne - 1)
+        Dim Kgl(ne - 1)(,) As Double
         Dim NoLoads(-1) As List(Of LocalLoad)
-        For ei = 0 To ne - 1
-            Dim E = M.Elements(ei)
-            Dim Tm = TransformationMatrix(E)
-            Dim dofs = ElementDofs(E)
-            Dim ch = Build(E, NoLoads, 0, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
-            ChainK(ei) = ch
-            Dim tmp(11, 11) As Double, kg(11, 11) As Double
-            For i = 0 To 11 : For j = 0 To 11
-                    Dim s As Double = 0
-                    For mm = 0 To 11 : s += ch.K(i, mm) * Tm(mm, j) : Next
-                    tmp(i, j) = s
-                Next : Next
-            For i = 0 To 11 : For j = 0 To 11
-                    Dim s As Double = 0
-                    For mm = 0 To 11 : s += Tm(mm, i) * tmp(mm, j) : Next
-                    kg(i, j) = s
-                Next : Next
-            AddToReduced(KRed, kg, dofs)
-        Next
-        AddMassGeometric(KRed)
+        Parallel.For(0, ne, Sub(ei)
+                                Dim E = M.Elements(ei)
+                                Dim Tm = TransformationMatrix(E)
+                                Dim ch = Build(E, NoLoads, 0, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
+                                ChainK(ei) = ch
+                                Dim tmp(11, 11) As Double, kg(11, 11) As Double
+                                For i = 0 To 11 : For j = 0 To 11
+                                        Dim sm As Double = 0
+                                        For mm = 0 To 11 : sm += ch.K(i, mm) * Tm(mm, j) : Next
+                                        tmp(i, j) = sm
+                                    Next : Next
+                                For i = 0 To 11 : For j = 0 To 11
+                                        Dim sm As Double = 0
+                                        For mm = 0 To 11 : sm += Tm(mm, i) * tmp(mm, j) : Next
+                                        kg(i, j) = sm
+                                    Next : Next
+                                Kgl(ei) = kg
+                            End Sub)
+        Dim K As New SkylineMatrix(NFree, Profile)
+        For ei = 0 To ne - 1 : AddToReduced(K, Kgl(ei), ElementDofs(M.Elements(ei))) : Next
+        AddMassGeometric(K)
+        ReDim KDiag(NFree - 1)
+        For i = 0 To NFree - 1 : KDiag(i) = K.Diag(i) : Next
+        If Not K.Factor() Then Throw New InvalidOperationException("stiffness matrix is not positive definite (unstable model?): reduced DOF " & K.FailedRow & " (" & Owner(K.FailedRow) & ")")
+        KFactor = K
     End Sub
+
+    'K^-1 B for the columns of B
+    Private Function SolveColumns(ByVal B As Matrix(Of Double)) As Matrix(Of Double)
+        Dim Y = Matrix(Of Double).Build.Dense(B.RowCount, B.ColumnCount)
+        For k = 0 To B.ColumnCount - 1 : Y.SetColumn(k, KFactor.Solve(B.Column(k).ToArray())) : Next
+        Return Y
+    End Function
 
     'Lumped nodal masses: half of the member mass to each end (vertical members over the full length, others over the clear length, as
     'the self weight), plus the vertical component of the loads of the mass source patterns (load / g)
@@ -166,13 +178,11 @@ Partial Public Class FemStatic
     '_______________________________________________________________________________________________
     'Subspace iteration for the lowest nModes of  K phi = w2 M phi  (K reduced stiffness, factorised once)
     Public Function ModalSolve(ByVal nModes As Integer) As ModalResults
-        AssembleStiffness()
+        If KFactor Is Nothing Then AssembleStiffness()
         ComputeMasses()
         Dim Mr = ReducedMass()
         Dim n As Integer = NFree
-        Dim Km = Matrix(Of Double).Build.DenseOfArray(KRed)
         Dim Mm = Matrix(Of Double).Build.DenseOfArray(Mr)
-        Dim Chol = Km.Cholesky()
         Dim massDof As Integer = 0
         For i = 0 To n - 1 : If Mr(i, i) > 0 Then massDof += 1
         Next
@@ -182,7 +192,7 @@ Partial Public Class FemStatic
         Dim X = Matrix(Of Double).Build.Dense(n, p)
         Dim Ratio As New List(Of KeyValuePair(Of Integer, Double))
         For i = 0 To n - 1
-            If Mr(i, i) > 0 Then Ratio.Add(New KeyValuePair(Of Integer, Double)(i, Mr(i, i) / KRed(i, i)))
+            If Mr(i, i) > 0 Then Ratio.Add(New KeyValuePair(Of Integer, Double)(i, Mr(i, i) / KDiag(i)))
         Next
         Ratio.Sort(Function(a, b) b.Value.CompareTo(a.Value))
         For i = 0 To n - 1 : X(i, 0) = Mr(i, i) : Next
@@ -192,7 +202,7 @@ Partial Public Class FemStatic
         Dim Lam(p - 1) As Double, OldLam(p - 1) As Double
         Dim R As New ModalResults
         For it = 1 To 200
-            Dim Y = Chol.Solve(Mm * X)                      'K^-1 M X
+            Dim Y = SolveColumns(Mm * X)                    'K^-1 M X
             Dim Kr = Y.Transpose() * (Mm * X)               'Y' K Y = Y' M X
             Dim Mq = Y.Transpose() * (Mm * Y)
             'symmetric reduced eigenproblem  Kr q = lam Mq q

@@ -57,12 +57,14 @@
     <Compile Include="FemModel.vb" />
     <Compile Include="FemElement.vb" />
     <Compile Include="FemChain.vb" />
+    <Compile Include="FemSkyline.vb" />
     <Compile Include="FemStatic.vb" />
     <Compile Include="FemModal.vb" />
     <Compile Include="FemPDelta.vb" />
     <Compile Include="FemDesign.vb" />
     <Compile Include="FemSeismic.vb" />
     <Compile Include="FemDesignDriver.vb" />
+    <Compile Include="FemEvaluator.vb" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
 </Project>

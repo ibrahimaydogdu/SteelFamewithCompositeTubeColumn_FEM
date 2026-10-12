@@ -23,6 +23,8 @@ Public Module Program
             End If
             If args(0) = "selftest" Then
                 SelfTest()
+            ElseIf args(0) = "bench" Then
+                Bench(args(1))
             ElseIf args(0) = "designcmp" Then
                 DesignCompare(args(1))
             ElseIf args(0) = "design" Then
@@ -589,6 +591,50 @@ Public Module Program
     End Sub
 
     'random sections for the design groups (frames of a group get the same section) from the sections defined in the model
+    'Speed of the FEM evaluation: random sections per group, analysis + design + drift displacements per round
+    Private Sub Bench(ByVal File As String)
+        StartEtabs()
+        Dim M As FemModel
+        Dim Rd As EtabsReader
+        Dim pool As New List(Of FemSection)
+        Try
+            Console.WriteLine("open " & Sap.File.OpenFile(File))
+            Sap.SetPresentUnits(eUnits.kN_m_C)
+            NoPDelta()
+            Sap.Analyze.RunAnalysis() : Sap.DesignSteel.StartDesign()
+            Rd = New EtabsReader(Sap)
+            M = Rd.Read()
+            If M.Prefs.DirectAnalysis Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
+            Dim nS As Integer, sn() As String = Nothing
+            Sap.PropFrame.GetNameList(nS, sn, eFramePropType.I)
+            For Each nm In sn.Where(Function(x) x.StartsWith("W")).OrderBy(Function(x) Rd.ReadSection(x).A).Where(Function(x, i) i Mod 3 = 0 AndAlso i >= 36).Take(40) : pool.Add(Rd.ReadSection(nm)) : Next
+            If Environment.GetEnvironmentVariable("FEM_BIG") = "1" Then
+                pool.Clear()
+                For Each nm In sn.Where(Function(x) x.StartsWith("W")).OrderByDescending(Function(x) Rd.ReadSection(x).A).Take(12) : pool.Add(Rd.ReadSection(nm)) : Next
+            End If
+            Console.WriteLine("section pool " & pool.Count & " of " & nS)
+        Finally
+            StopEtabs()
+        End Try
+        Dim Ev As New FemEvaluator(M) With {.MassPDelta = Environment.GetEnvironmentVariable("FEM_PDELTA") <> "none"}
+        Dim rnd As New Random(1)
+        Dim groups = M.Elements.Select(Function(e) e.Group).Where(Function(g) g IsNot Nothing).Distinct().ToList()
+        Dim driftNames = M.Combos.Where(Function(c) c.RSTerms.Count > 0 OrElse c.Name.StartsWith("E") OrElse c.Name.Contains("RS")).Select(Function(c) c.Name).Take(4).ToList()
+        Console.WriteLine("groups " & groups.Count & ", elements " & M.Elements.Count & ", free DOF " & New FemStatic(M).NFree & ", patterns " & M.Patterns.Count & ", combos " & M.Combos.Count & ", RS cases " & M.RSCases.Count & ", drift names " & String.Join(",", driftNames))
+        For round = 1 To Integer.Parse(If(Environment.GetEnvironmentVariable("FEM_ROUNDS"), "5"))
+            For Each g In groups : Ev.AssignSection(g, pool(rnd.Next(pool.Count))) : Next
+            Dim sw = Stopwatch.StartNew()
+            Dim R = Ev.Analyze()
+            Dim t1 = sw.ElapsedMilliseconds
+            For Each dn In driftNames : Ev.Displacements(R, dn) : Next
+            Dim t2 = sw.ElapsedMilliseconds
+            If Not R.Failed Then Ev.Design(R)
+            Console.WriteLine("round " & round & ": analysis " & t1 & " ms, displacements +" & (t2 - t1) & " ms, design +" & (sw.ElapsedMilliseconds - t2) & " ms, failed " & R.Failed & " " & R.Message & If(R.Members IsNot Nothing, " maxPMM " & R.Members.Max(Function(x) x.PMM).ToString("0.000"), ""))
+        Next
+        Console.WriteLine(Ev.TimingReport())
+        Console.WriteLine(FemProfile.Report())
+    End Sub
+
     Private Sub RandomSections(ByVal Seed As Integer)
         Dim rnd As New Random(Seed)
         Dim nS As Integer, sn() As String = Nothing

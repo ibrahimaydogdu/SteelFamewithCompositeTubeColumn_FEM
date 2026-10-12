@@ -199,7 +199,7 @@ Public Class EtabsReader
         Log("  cardinal points in the model: " & String.Join(", ", CpStats.Select(Function(kv) kv.Key & " x" & kv.Value)))
     End Sub
 
-    Private Function ReadSection(ByVal Name As String) As FemSection
+    Public Function ReadSection(ByVal Name As String) As FemSection
         Dim S As New FemSection With {.Name = Name}
         Dim fn As String = "", mat As String = "", t3, t2, tf, tw, t2b, tfb, fr As Double, col As Integer, notes As String = "", guid As String = ""
         If Sap.PropFrame.GetISection_1(Name, fn, mat, t3, t2, tf, tw, t2b, tfb, fr, col, notes, guid) <> 0 Then

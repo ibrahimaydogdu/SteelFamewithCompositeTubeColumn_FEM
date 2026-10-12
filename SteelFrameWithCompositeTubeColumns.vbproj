@@ -81,6 +81,9 @@
       <Private>True</Private>
     </Reference>
     <Reference Include="netstandard" />
+    <Reference Include="MathNet.Numerics">
+      <HintPath>packages\MathNet.Numerics.5.0.0\lib\net461\MathNet.Numerics.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Configuration" />
     <Reference Include="System.Data" />
@@ -111,6 +114,9 @@
     <Compile Include="ApplicationEvents.vb" />
     <Compile Include="CompositeColumn.vb" />
     <Compile Include="ETABSClass.vb" />
+    <Compile Include="ETABSClass.Backends.vb" />
+    <Compile Include="StructureEvaluator.vb" />
+    <Compile Include="FemTool\EtabsReader.vb" />
     <Compile Include="Structures.vb" />
     <Compile Include="MainForm.vb">
       <SubType>Form</SubType>
@@ -192,6 +198,12 @@
     <Content Include="TubeSections.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="FemCore\FemCore.vbproj">
+      <Project>{3C5E7A19-84D2-4F6B-A1C3-9E2D5B7F0A41}</Project>
+      <Name>FemCore</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.VisualBasic.targets" />
 </Project>

@@ -10,10 +10,14 @@ Partial Public Class FemStatic
     Public Const ScwbC0 As Double = 1.5335
     Public Const ScwbC1 As Double = 2.23
 
+    Public Above() As Integer                                   'column above the top joint of every column (-1: none), set by StrongColumnWeakBeam
+
     'Ratios of every column (per element index): Major and Minor (0 when the joint has no column above or no moment beam in that plane)
     Public Sub StrongColumnWeakBeam(ByVal Fem() As MemberRatios, ByRef Major() As Double, ByRef Minor() As Double)
         Dim ne As Integer = M.Elements.Count
         ReDim Major(ne - 1) : ReDim Minor(ne - 1)
+        ReDim Above(ne - 1)
+        For i = 0 To ne - 1 : Above(i) = -1 : Next
         Dim IsCol = Function(e As FemElement) Math.Abs(e.Axes(0, 2)) > 0.9
         Dim Attached As New Dictionary(Of Integer, List(Of Integer))
         For i = 0 To ne - 1
@@ -31,6 +35,7 @@ Partial Public Class FemStatic
                 Dim e = M.Elements(ei)
                 If ei <> ci AndAlso IsCol(e) AndAlso M.Nodes(If(e.NI = top, e.NJ, e.NI)).Z > M.Nodes(top).Z Then above = ei
             Next
+            Me.Above(ci) = above
             If above < 0 Then Continue For
             Dim ab = M.Elements(above)
             For plane = 0 To 1                                   '0 = major (axis 2 of the column in the plane), 1 = minor

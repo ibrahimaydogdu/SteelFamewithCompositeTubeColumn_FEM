@@ -10,17 +10,11 @@ Public Class MemberRatios
 End Class
 
 Partial Public Class FemStatic
-    Private LoadCache As Dictionary(Of Integer, List(Of LocalLoad)())
+    Private ReadOnly LoadCache As New System.Collections.Concurrent.ConcurrentDictionary(Of Integer, List(Of LocalLoad)())
     Public TraceElement As Integer = -1
 
     Private Function CachedLoads(ByVal ei As Integer) As List(Of LocalLoad)()
-        If LoadCache Is Nothing Then LoadCache = New Dictionary(Of Integer, List(Of LocalLoad)())
-        Dim L As List(Of LocalLoad)() = Nothing
-        If Not LoadCache.TryGetValue(ei, L) Then
-            L = ElementLoads(ei, M.Elements(ei))
-            LoadCache(ei) = L
-        End If
-        Return L
+        Return LoadCache.GetOrAdd(ei, Function(k) ElementLoads(k, M.Elements(k)))
     End Function
 
     'Internal forces of pattern p at the distances xs from the start of the clear span of element ei: rows N (tension +), V2, V3, T, M2, M3
@@ -163,9 +157,7 @@ Partial Public Class FemStatic
     'Design ratios of all members for combinations of the static patterns (sums of pattern results)
     Public Function DesignMembers(ByVal R As StaticResults, ByVal Combos As List(Of FemCombo), ByVal Prefs As DesignPrefs, Optional ByVal RS As Dictionary(Of String, RSResults) = Nothing) As MemberRatios()
         Dim Out(M.Elements.Count - 1) As MemberRatios
-        For ei = 0 To M.Elements.Count - 1
-            Out(ei) = DesignElement(R, ei, Combos, Prefs, RS)
-        Next
+        System.Threading.Tasks.Parallel.For(0, M.Elements.Count, Sub(ei) Out(ei) = DesignElement(R, ei, Combos, Prefs, RS))
         Return Out
     End Function
 

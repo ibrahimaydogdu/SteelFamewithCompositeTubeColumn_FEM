@@ -1,4 +1,23 @@
-Imports MathNet.Numerics.LinearAlgebra
+Imports System.Diagnostics
+Imports System.Threading.Tasks
+
+'Stopwatches of the solver phases (benchmarks)
+Public Module FemProfile
+    Public ReadOnly Watches As New Dictionary(Of String, Stopwatch)
+    Public Function Watch(ByVal Name As String) As Stopwatch
+        Dim w As Stopwatch = Nothing
+        SyncLock Watches
+            If Not Watches.TryGetValue(Name, w) Then w = New Stopwatch : Watches(Name) = w
+        End SyncLock
+        Return w
+    End Function
+    Public Function Report() As String
+        Return String.Join("; ", Watches.Select(Function(kv) kv.Key & " " & kv.Value.ElapsedMilliseconds & " ms"))
+    End Function
+    Public Sub Reset()
+        Watches.Clear()
+    End Sub
+End Module
 
 'Results of a linear static solution (one entry per load pattern, in the order of FemModel.Patterns)
 Public Class StaticResults
@@ -13,13 +32,17 @@ End Class
 
 'Linear static solver: 3D frame, rigid diaphragms (one per story, master DOF Ux Uy Rz at the centroid), restraints, releases.
 'The DOF map keeps for every node DOF the reduced DOF it depends on (a free DOF: itself; a diaphragm slave: the three masters).
+'The reduced DOF are numbered with the reverse Cuthill-McKee algorithm; the stiffness matrix is in profile storage (FemSkyline.vb).
 Partial Public Class FemStatic
     Private ReadOnly M As FemModel
     Private MapIdx()() As Integer
     Private MapCoef()() As Double
     Public NFree As Integer
     Private Owner As List(Of String)
+    Private Profile() As Integer                    'first column of every row of the profile
     Public AxialForces() As Double                  'axial force per element for the geometric stiffness (Nothing: linear)
+    Private KFactor As SkylineMatrix                'factored reduced stiffness matrix of the last Solve / AssembleStiffness
+    Private KDiag() As Double                       'diagonal of the stiffness matrix before the factorisation
 
     Public Sub New(ByVal Model As FemModel)
         M = Model
@@ -36,8 +59,9 @@ Partial Public Class FemStatic
         For Each el In M.Elements : Attached(el.NI) = True : Attached(el.NJ) = True : Next
         'diaphragm masters
         Dim Master(M.DiaphragmCount - 1, 2) As Integer, Xc(M.DiaphragmCount - 1) As Double, Yc(M.DiaphragmCount - 1) As Double, Cnt(M.DiaphragmCount - 1) As Integer
-        For Each nd In M.Nodes
-            If nd.Diaphragm >= 0 AndAlso Attached(M.Nodes.IndexOf(nd)) Then
+        For i = 0 To nn - 1
+            Dim nd = M.Nodes(i)
+            If nd.Diaphragm >= 0 AndAlso Attached(i) Then
                 Xc(nd.Diaphragm) += nd.X : Yc(nd.Diaphragm) += nd.Y : Cnt(nd.Diaphragm) += 1
             End If
         Next
@@ -63,6 +87,41 @@ Partial Public Class FemStatic
                 Else
                     MapIdx(dof) = {NFree} : MapCoef(dof) = {1.0} : NFree += 1 : Owner.Add("node " & nd.Name & " " & {"U1", "U2", "U3", "R1", "R2", "R3"}(d))
                 End If
+            Next
+        Next
+        OrderDof()
+    End Sub
+
+    'Reverse Cuthill-McKee numbering of the reduced DOF (graph: DOF that share an element), profile of the stiffness matrix
+    Private Sub OrderDof()
+        Dim Adj(NFree - 1) As HashSet(Of Integer)
+        For i = 0 To NFree - 1 : Adj(i) = New HashSet(Of Integer) : Next
+        Dim Set1 As New HashSet(Of Integer)
+        For Each E In M.Elements
+            Set1.Clear()
+            For Each dof In ElementDofs(E)
+                For Each r In MapIdx(dof) : Set1.Add(r) : Next
+            Next
+            For Each a In Set1
+                For Each b In Set1
+                    If a <> b Then Adj(a).Add(b)
+                Next
+            Next
+        Next
+        Dim Lists(NFree - 1) As List(Of Integer)
+        For i = 0 To NFree - 1 : Lists(i) = Adj(i).ToList() : Next
+        Dim Perm = SkylineMatrix.ReverseCuthillMcKee(Lists)
+        For dof = 0 To MapIdx.Length - 1
+            For t = 0 To MapIdx(dof).Length - 1 : MapIdx(dof)(t) = Perm(MapIdx(dof)(t)) : Next
+        Next
+        Dim NewOwner(NFree - 1) As String
+        For i = 0 To NFree - 1 : NewOwner(Perm(i)) = Owner(i) : Next
+        Owner = NewOwner.ToList()
+        ReDim Profile(NFree - 1)
+        For i = 0 To NFree - 1 : Profile(Perm(i)) = Perm(i) : Next
+        For i = 0 To NFree - 1
+            For Each j In Lists(i)
+                If Perm(j) < Profile(Perm(i)) Then Profile(Perm(i)) = Perm(j)
             Next
         Next
     End Sub
@@ -125,42 +184,70 @@ Partial Public Class FemStatic
         Return q
     End Function
 
+    'Element data of one analysis: chain, transformation, stiffness and loads in global axes
+    Private Class ElementData
+        Public Chain As ChainResult
+        Public T(,) As Double
+        Public Kglobal(,) As Double
+        Public Fglobal()() As Double                'per pattern, Nothing when the pattern does not load the element
+    End Class
+
+    Private Function BuildElement(ByVal ei As Integer, ByVal np As Integer) As ElementData
+        Dim E = M.Elements(ei)
+        Dim D As New ElementData
+        Dim Tm = TransformationMatrix(E)
+        Dim ch = Build(E, ElementLoads(ei, E), np, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
+        D.Chain = ch : D.T = Tm
+        Dim tmp(11, 11) As Double
+        D.Kglobal = New Double(11, 11) {}
+        For i = 0 To 11 : For j = 0 To 11
+                Dim s As Double = 0
+                For mm = 0 To 11 : s += ch.K(i, mm) * Tm(mm, j) : Next
+                tmp(i, j) = s
+            Next : Next
+        For i = 0 To 11 : For j = 0 To 11
+                Dim s As Double = 0
+                For mm = 0 To 11 : s += Tm(mm, i) * tmp(mm, j) : Next
+                D.Kglobal(i, j) = s
+            Next : Next
+        D.Fglobal = New Double(np - 1)() {}
+        For p = 0 To np - 1
+            Dim fg(11) As Double
+            Dim anyLoad As Boolean = False
+            For i = 0 To 11
+                Dim s As Double = 0
+                For mm = 0 To 11 : s += Tm(mm, i) * ch.Load(p)(mm) : Next
+                fg(i) = s : If s <> 0 Then anyLoad = True
+            Next
+            If anyLoad Then D.Fglobal(p) = fg
+        Next
+        Return D
+    End Function
+
     Public Function Solve() As StaticResults
         Dim R As New StaticResults
         Dim np As Integer = M.Patterns.Count, ne As Integer = M.Elements.Count
         R.U = New Double(np - 1)() {} : R.Reaction = New Double(np - 1)() {} : R.EndForce = New Double(np - 1)()() {} : R.FaceForce = New Double(np - 1)()() {} : R.Axial = New Double(np - 1)() {}
-        Dim K(NFree - 1, NFree - 1) As Double
+        Dim Data(ne - 1) As ElementData
+        Dim wCh = Watch("solve.chains") : wCh.Start()
+        Try
+            Parallel.For(0, ne, Sub(ei) Data(ei) = BuildElement(ei, np))
+        Catch ex As AggregateException
+            wCh.Stop()
+            R.Failed = True : R.Message = ex.InnerExceptions(0).Message
+            Return R
+        End Try
+        wCh.Stop()
+        Dim wAsm = Watch("solve.assemble") : wAsm.Start()
+        Dim K As New SkylineMatrix(NFree, Profile)
         Dim Fred(np - 1)() As Double
         For p = 0 To np - 1 : Fred(p) = New Double(NFree - 1) {} : Next
-        Dim Chains(ne - 1) As ChainResult, TT As Double()(,) = New Double(ne - 1)(,) {}
-
         For ei = 0 To ne - 1
-            Dim E = M.Elements(ei)
-            Dim Tm = TransformationMatrix(E)
-            Dim dofs = ElementDofs(E)
-            Dim ch = Build(E, ElementLoads(ei, E), np, M.AxialFactor, M.FlexuralFactor, If(AxialForces Is Nothing, 0.0, AxialForces(ei)))
-            Chains(ei) = ch : TT(ei) = Tm
-            Dim tmp(11, 11) As Double, kg(11, 11) As Double
-            For i = 0 To 11 : For j = 0 To 11
-                    Dim s As Double = 0
-                    For mm = 0 To 11 : s += ch.K(i, mm) * Tm(mm, j) : Next
-                    tmp(i, j) = s
-                Next : Next
-            For i = 0 To 11 : For j = 0 To 11
-                    Dim s As Double = 0
-                    For mm = 0 To 11 : s += Tm(mm, i) * tmp(mm, j) : Next
-                    kg(i, j) = s
-                Next : Next
-            AddToReduced(K, kg, dofs)
+            Dim dofs = ElementDofs(M.Elements(ei))
+            AddToReduced(K, Data(ei).Kglobal, dofs)
             For p = 0 To np - 1
-                Dim fg(11) As Double
-                Dim anyLoad As Boolean = False
-                For i = 0 To 11
-                    Dim s As Double = 0
-                    For mm = 0 To 11 : s += Tm(mm, i) * ch.Load(p)(mm) : Next
-                    fg(i) = s : If s <> 0 Then anyLoad = True
-                Next
-                If Not anyLoad Then Continue For
+                Dim fg = Data(ei).Fglobal(p)
+                If fg Is Nothing Then Continue For
                 For a = 0 To 11
                     For t = 0 To MapIdx(dofs(a)).Length - 1 : Fred(p)(MapIdx(dofs(a))(t)) += MapCoef(dofs(a))(t) * fg(a) : Next
                 Next
@@ -176,22 +263,23 @@ Partial Public Class FemStatic
                 Next
             Next
         Next
+        wAsm.Stop()
 
         Dim q(np - 1)() As Double
-        Try
-            Dim Kd = Matrix(Of Double).Build.DenseOfArray(K)
-            Dim Rhs = Matrix(Of Double).Build.Dense(NFree, np)
-            For p = 0 To np - 1 : For i = 0 To NFree - 1 : Rhs(i, p) = Fred(p)(i) : Next : Next
-            Dim Sol = Kd.Cholesky().Solve(Rhs)
-            For p = 0 To np - 1
-                q(p) = New Double(NFree - 1) {}
-                For i = 0 To NFree - 1 : q(p)(i) = Sol(i, p) : Next
-            Next
-        Catch ex As Exception
-            R.Failed = True : R.Message = "stiffness matrix is not positive definite (unstable model?): " & ex.Message & "; first non-positive pivot: " & FirstBadPivot(K)
+        Dim wSol = Watch("solve.factor") : wSol.Start()
+        ReDim KDiag(NFree - 1)
+        For i = 0 To NFree - 1 : KDiag(i) = K.Diag(i) : Next
+        If Not K.Factor() Then
+            wSol.Stop()
+            R.Failed = True : R.Message = "stiffness matrix is not positive definite (unstable model?); first non-positive pivot: reduced DOF " & K.FailedRow & " (" & Owner(K.FailedRow) & ")"
             Return R
-        End Try
+        End If
+        KFactor = K
+        ChainK = Data.Select(Function(d) d.Chain).ToArray()
+        For p = 0 To np - 1 : q(p) = K.Solve(Fred(p)) : Next
+        wSol.Stop()
 
+        Dim wRec = Watch("solve.recovery") : wRec.Start()
         For p = 0 To np - 1
             Dim U(M.Nodes.Count * 6 - 1) As Double
             For dof = 0 To U.Length - 1
@@ -205,24 +293,25 @@ Partial Public Class FemStatic
             For ei = 0 To ne - 1
                 Dim E = M.Elements(ei)
                 Dim dofs = ElementDofs(E)
+                Dim TT = Data(ei).T, Ch = Data(ei).Chain
                 Dim ul(11) As Double
                 For i = 0 To 11
                     Dim s As Double = 0
-                    For j = 0 To 11 : s += TT(ei)(i, j) * U(dofs(j)) : Next
+                    For j = 0 To 11 : s += TT(i, j) * U(dofs(j)) : Next
                     ul(i) = s
                 Next
                 Dim f(11) As Double
                 For i = 0 To 11
                     Dim s As Double = 0
-                    For j = 0 To 11 : s += Chains(ei).KEl(i, j) * ul(j) : Next
-                    f(i) = s - Chains(ei).Load(p)(i)
+                    For j = 0 To 11 : s += Ch.KEl(i, j) * ul(j) : Next
+                    f(i) = s - Ch.Load(p)(i)
                 Next
                 R.EndForce(p)(ei) = f
-                R.FaceForce(p)(ei) = FaceForces(Chains(ei), ul, p)
+                R.FaceForce(p)(ei) = FaceForces(Ch, ul, p)
                 R.Axial(p)(ei) = 0.5 * (R.FaceForce(p)(ei)(6) - R.FaceForce(p)(ei)(0))
                 For i = 0 To 11
                     Dim s As Double = 0
-                    For j = 0 To 11 : s += TT(ei)(j, i) * f(j) : Next
+                    For j = 0 To 11 : s += TT(j, i) * f(j) : Next
                     Rx(dofs(i)) += s
                 Next
             Next
@@ -236,29 +325,12 @@ Partial Public Class FemStatic
             Next
             R.Reaction(p) = Rx
         Next
+        wRec.Stop()
         Return R
     End Function
 
-    'Dense Cholesky pivots of the reduced matrix: the first non-positive one points to the unstable DOF
-    Private Function FirstBadPivot(ByVal K As Double(,)) As String
-        Dim n As Integer = NFree
-        Dim L(n - 1, n - 1) As Double
-        For i = 0 To n - 1
-            For j = 0 To i
-                Dim sm As Double = K(i, j)
-                For k2 = 0 To j - 1 : sm -= L(i, k2) * L(j, k2) : Next
-                If i = j Then
-                    If sm <= 1.0E-9 * Math.Abs(K(i, i)) Then Return "reduced DOF " & i & " (" & Owner(i) & "), pivot " & sm.ToString("0.0E+00") & " diagonal " & K(i, i).ToString("0.0E+00")
-                    L(i, i) = Math.Sqrt(sm)
-                Else
-                    L(i, j) = sm / L(j, j)
-                End If
-            Next
-        Next
-        Return "none found"
-    End Function
-
-    Private Sub AddToReduced(ByVal K As Double(,), ByVal kg As Double(,), ByVal dofs As Integer())
+    'Lower triangle of the reduced stiffness matrix: the symmetric counterparts are added by the transposed element entries
+    Private Sub AddToReduced(ByVal K As SkylineMatrix, ByVal kg As Double(,), ByVal dofs As Integer())
         For a = 0 To 11
             Dim ia = MapIdx(dofs(a)), ca = MapCoef(dofs(a))
             If ia.Length = 0 Then Continue For
@@ -268,7 +340,7 @@ Partial Public Class FemStatic
                 Dim ib = MapIdx(dofs(b)), cb = MapCoef(dofs(b))
                 For s = 0 To ia.Length - 1
                     For t = 0 To ib.Length - 1
-                        K(ia(s), ib(t)) += ca(s) * cb(t) * v
+                        If ia(s) >= ib(t) Then K.Add(ia(s), ib(t), ca(s) * cb(t) * v)
                     Next
                 Next
             Next

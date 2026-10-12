@@ -157,6 +157,8 @@ Partial Public Class ETABS_Class
 
     Private Function Initialize() As Integer
         Dim ret As Integer
+        EtabsBackend = New EtabsEvaluator(Me)
+        Backend = EtabsBackend
         ret = InitializeETABS()
         If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeETABS") : Return ret : End If
         If FormInfo.CompositeColumns Then
@@ -223,6 +225,8 @@ Partial Public Class ETABS_Class
             ret = WidenBoundsForDrift()
             If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: WidenBoundsForDrift") : Return ret : End If
         End If
+        ret = SelectEvaluator()
+        If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: SelectEvaluator") : Return ret : End If
         '_____________________________________________________
         'Start Timer
         FormInfo.TimerInfo.startDate = Date.Now
@@ -1625,13 +1629,13 @@ Partial Public Class ETABS_Class
             Return 0
         End If
         Dim ret As Integer
-        If RestartDue() Then
+        If Backend Is EtabsBackend AndAlso RestartDue() Then
             ret = RestartETABS()
             If ret <> 0 Then : Errorlogprint("Problem occurred on :RestartETABS") : Return ret : End If
         End If
-        ret = E2_SetSection(Sect_Ind)
+        ret = Backend.AssignSections(Sect_Ind)
         If ret <> 0 Then Return ret
-        ret = E3_Analysis()
+        ret = Backend.Analyze()
         If ret = 0 Then LastAnalysed = CType(Sect_Ind.Clone(), Integer()) : LastAnalysedComp = CurrentTypes()
         Return ret
     End Function
@@ -2052,37 +2056,22 @@ Partial Public Class ETABS_Class
     End Function
 
     Private Function F1_1_UpdateJointDispCore() As Integer
-        Dim ret As Integer = SelectOutputCases()
+        Dim Rows As New List(Of DispRow)
+        Dim ret As Integer = Backend.ReadDisplacements(Rows)
         If (ret <> 0) Then Return ret
-
-        Dim NumberResults As Integer
-        Dim Obj() As String = Nothing
-        Dim Elm() As String = Nothing
-        Dim LoadCase() As String = Nothing
-        Dim StepType() As String = Nothing
-        Dim StepNum() As Double = Nothing
-        Dim U1() As Double = Nothing
-        Dim U2() As Double = Nothing
-        Dim U3() As Double = Nothing
-        Dim R1() As Double = Nothing
-        Dim R2() As Double = Nothing
-        Dim R3() As Double = Nothing
-        ret = SapModel.Results.JointDispl("All", ETABSv1.eItemTypeElm.GroupElm, NumberResults, Obj, Elm, LoadCase, StepType, StepNum, U1, U2, U3, R1, R2, R3)
-        If (ret <> 0) Then : Errorlogprint("Problem occurred on :Results.JointDispl") : Return ret : End If
-
         For i = 0 To Points.Length - 1
             Points(i).PointDisp = New FramePointStoryGroupStructures_.LoadCaseDisp_ With {
                 .U1 = New List(Of Double), .U2 = New List(Of Double)}
         Next i
-        For k = 0 To NumberResults - 1
+        For Each Row In Rows
             Dim i As Integer
-            If Not PointIndex.TryGetValue(Obj(k), i) Then Continue For
+            If Not PointIndex.TryGetValue(Row.Point, i) Then Continue For
             Dim f As Double = 1.0
-            If DriftFactor.Count > 0 AndAlso Not DriftFactor.TryGetValue(LoadCase(k), f) Then f = 1.0
+            If DriftFactor.Count > 0 AndAlso Not DriftFactor.TryGetValue(Row.CaseName, f) Then f = 1.0
             With Points(i).PointDisp
-                .U1.Add(f * U1(k)) : .U2.Add(f * U2(k))
+                .U1.Add(f * Row.U1) : .U2.Add(f * Row.U2)
             End With
-        Next k
+        Next
         Return ret
     End Function
 
@@ -2261,71 +2250,31 @@ Partial Public Class ETABS_Class
         End Try
     End Function
 
-    'updateDesignSections: also read the sections selected by ETABS (needed only for auto select lists)
+    'updateDesignSections: also read the sections selected by ETABS (needed only for auto select lists; always ETABS)
     Private Function G1_ConsPMM(ByVal updateDesignSections As Boolean) As Integer
-        Dim ret As Integer = G1_1_Design()
-        If (ret <> 0) Then : Errorlogprint("Problem occurred on :G1_1_Design") : Return ret : End If
+        Dim Eval As IStructureEvaluator = If(updateDesignSections, CType(EtabsBackend, IStructureEvaluator), Backend)
+        EtabsBackend.UpdateSections = updateDesignSections
+        Dim Design As New Dictionary(Of String, GroupDesign)
+        Dim ret As Integer = Eval.ReadSteelDesign(Design)
+        If (ret <> 0) Then : Errorlogprint("Problem occurred on :ReadSteelDesign (" & Eval.Name & ")") : Return ret : End If
         Try
-            'one call for the whole model (instead of one per group), results grouped by the design groups
-            Dim NumberItems As Integer
-            Dim FrameName As String() = Nothing
-            Dim Ratio As Double() = Nothing
-            Dim RatioType As Integer() = Nothing
-            Dim Location As Double() = Nothing
-            Dim ComboName As String() = Nothing
-            Dim ErrorSummary As String() = Nothing
-            Dim WarningSummary As String() = Nothing
-            Dim ByGroup As New Dictionary(Of String, List(Of Integer))
-            If SteelFrameDesignGroupIDs.Any(Function(id) Not (CompositeActive AndAlso Groups(id).IsComposite)) Then
-                If SapModel.DesignSteel.GetSummaryResults("All", NumberItems, FrameName, Ratio, RatioType, Location, ComboName, ErrorSummary, WarningSummary, ETABSv1.eItemType.Group) <> 0 Then NumberItems = 0
-                For j = 0 To NumberItems - 1
-                    Dim F As Integer
-                    If Not FrameIndex.TryGetValue(FrameName(j), F) OrElse Frames(F).GroupName Is Nothing Then Continue For
-                    If Not ByGroup.ContainsKey(Frames(F).GroupName) Then ByGroup(Frames(F).GroupName) = New List(Of Integer)
-                    ByGroup(Frames(F).GroupName).Add(j)
-                Next
-            End If
             ret = 0
-            Dim BCRatios As Dictionary(Of String, Double) = Nothing
-            If NumberItems > 0 AndAlso ErrorSummary IsNot Nothing AndAlso ErrorSummary.Any(Function(m) m IsNot Nothing AndAlso m.Contains(BC_MESSAGE)) Then BCRatios = ReadBeamColumnRatios()
             For i = 0 To SteelFrameDesignGroupIDs.Count - 1
                 Dim ID As Integer = SteelFrameDesignGroupIDs(i)
                 If CompositeActive AndAlso Groups(ID).IsComposite Then Continue For
-                Dim Items As List(Of Integer) = Nothing
-                If Not ByGroup.TryGetValue(Groups(ID).GroupName, Items) Then
+                Dim GD As GroupDesign = Nothing
+                If Not Design.TryGetValue(Groups(ID).GroupName, GD) Then
                     Errorlogprint("Warning: no steel design results for group " & Groups(ID).GroupName)
                     If updateDesignSections Then Return -1
                     AnalysisFailed = True
                     Return 0
                 End If
-                Groups(ID).PMMRatio = Items.Max(Function(j) Ratio(j)) / SteelRatioLimit      'ETABS D/C ratio limit
+                Groups(ID).PMMRatio = GD.MaxRatio / SteelRatioLimit      'D/C ratio limit
                 'a beam/column capacity ratio above the limit (AISC 341 strong column - weak beam) is a continuous constraint: its ratio
                 'goes into the ratio of the group instead of the error count
-                Dim BC As Double = 0
-                If BCRatios IsNot Nothing Then BCRatios.TryGetValue(Groups(ID).GroupName, BC)
-                Groups(ID).SCWBRatio = BC
-                Dim ErrorCount As Integer = Items.Where(Function(j) Not String.IsNullOrEmpty(ErrorSummary(j)) AndAlso Not (BCRatios IsNot Nothing AndAlso OnlyBeamColumnMessage(ErrorSummary(j)))).Count()
-                If ErrorCount > 0 Then
-                    Groups(ID).PMMRatio += 1 + ErrorCount / Items.Count
-                    LogDesignErrors(Groups(ID).GroupName, Items, FrameName, ErrorSummary, BCRatios IsNot Nothing)
-                End If
-                If BC > Groups(ID).PMMRatio Then Groups(ID).PMMRatio = BC
-
-                If updateDesignSections Then
-                    'largest (by area) design section of the group
-                    Dim BestName As String = Nothing
-                    Dim BestArea As Double = Double.NegativeInfinity
-                    For Each j In Items
-                        Dim PropName As String = Nothing
-                        ret = SapModel.DesignSteel.GetDesignSection(FrameName(j), PropName)
-                        If (ret <> 0) Then : Errorlogprint("Problem occurred on :DesignSteel.GetDesignSection") : Return ret : End If
-                        Dim SectID As Integer = WSections.FindIndex(Function(c) c.SectionName = PropName)
-                        Dim Area As Double = If(SectID >= 0, WSections(SectID).Area, 0)
-                        If Area > BestArea Then : BestArea = Area : BestName = PropName : End If
-                    Next
-                    Groups(ID).DesignSecName = BestName
-                    Groups(ID).DesignSecID = WSections.FindIndex(Function(c) c.SectionName = BestName)
-                End If
+                Groups(ID).SCWBRatio = GD.BCRatio
+                If GD.ErrorCount > 0 Then Groups(ID).PMMRatio += 1 + GD.ErrorCount / GD.Items
+                If GD.BCRatio > Groups(ID).PMMRatio Then Groups(ID).PMMRatio = GD.BCRatio
             Next i
             If CompositeActive Then
                 Dim c = Clock("CompositeCheck") : c.Start()

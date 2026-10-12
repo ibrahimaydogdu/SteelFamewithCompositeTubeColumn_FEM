@@ -23,14 +23,14 @@ Partial Public Class FemStatic
         AxialForces = Nothing
     End Sub
 
-    Friend Sub AddMassGeometric(ByVal K As Double(,))
+    Friend Sub AddMassGeometric(ByVal K As SkylineMatrix)
         If Not MassGeometric Then Return
         For dof = 0 To M.Nodes.Count * 6 - 1
             Dim w As Double = GeomW(dof)
             If w = 0 OrElse MapIdx(dof).Length = 0 Then Continue For
             For a = 0 To MapIdx(dof).Length - 1
                 For b = 0 To MapIdx(dof).Length - 1
-                    K(MapIdx(dof)(a), MapIdx(dof)(b)) -= MapCoef(dof)(a) * MapCoef(dof)(b) * w
+                    If MapIdx(dof)(a) >= MapIdx(dof)(b) Then K.Add(MapIdx(dof)(a), MapIdx(dof)(b), -MapCoef(dof)(a) * MapCoef(dof)(b) * w)
                 Next
             Next
         Next
