@@ -69,6 +69,7 @@ Partial Class MainForm
         Me.GroupTypeGrid = New System.Windows.Forms.DataGridView()
         Me.SkipCases = New System.Windows.Forms.CheckBox()
         Me.PDeltaBox = New System.Windows.Forms.CheckBox()
+        Me.FemBox = New System.Windows.Forms.CheckBox()
         Me.GroupBox9 = New System.Windows.Forms.GroupBox()
         Me.Label28 = New System.Windows.Forms.Label()
         Me.RepairModeBox = New System.Windows.Forms.ComboBox()
@@ -464,9 +465,10 @@ Partial Class MainForm
         Me.GroupBox8.Controls.Add(Me.CompositeCodeBox)
         Me.GroupBox8.Controls.Add(Me.SkipCases)
         Me.GroupBox8.Controls.Add(Me.PDeltaBox)
+        Me.GroupBox8.Controls.Add(Me.FemBox)
         Me.GroupBox8.Location = New System.Drawing.Point(275, 0)
         Me.GroupBox8.Name = "GroupBox8"
-        Me.GroupBox8.Size = New System.Drawing.Size(400, 245)
+        Me.GroupBox8.Size = New System.Drawing.Size(400, 270)
         Me.GroupBox8.TabIndex = 26
         Me.GroupBox8.TabStop = False
         Me.GroupBox8.Text = "Analysis / Composite Options"
@@ -1096,8 +1098,20 @@ Partial Class MainForm
         Me.PDeltaBox.Text = "P-Delta analysis (nonlinear cases + preset P-Delta)"
         Me.PDeltaBox.UseVisualStyleBackColor = True
         '
-        'MethodBox
+        'FemBox
         '
+        Me.FemBox.AutoSize = True
+        Me.FemBox.Checked = True
+        Me.FemBox.CheckState = System.Windows.Forms.CheckState.Checked
+        Me.FemBox.Location = New System.Drawing.Point(8, 240)
+        Me.FemBox.Name = "FemBox"
+        Me.FemBox.Size = New System.Drawing.Size(385, 20)
+        Me.FemBox.TabIndex = 10
+        Me.FemBox.Text = "FEM solver (fast); final design checked with ETABS"
+        Me.FemBox.UseVisualStyleBackColor = True
+        '
+        'MethodBox
+                '
         Me.MethodBox.Controls.Add(Me.ParamTable)
         Me.MethodBox.Controls.Add(Me.MethodInfo)
         Me.MethodBox.Location = New System.Drawing.Point(383, 4)
@@ -1200,7 +1214,7 @@ Partial Class MainForm
         Me.GroupBox10.Controls.Add(Me.Label35)
         Me.GroupBox10.Controls.Add(Me.CostFormworkBox)
         Me.GroupBox10.Controls.Add(Me.Label36)
-        Me.GroupBox10.Location = New System.Drawing.Point(275, 251)
+        Me.GroupBox10.Location = New System.Drawing.Point(275, 276)
         Me.GroupBox10.Name = "GroupBox10"
         Me.GroupBox10.Size = New System.Drawing.Size(400, 200)
         Me.GroupBox10.TabIndex = 27
@@ -1389,6 +1403,7 @@ Partial Class MainForm
     Friend WithEvents GroupTypeGrid As DataGridView
     Friend WithEvents SkipCases As CheckBox
     Friend WithEvents PDeltaBox As CheckBox
+    Friend WithEvents FemBox As CheckBox
     Friend WithEvents GroupBox9 As GroupBox
     Friend WithEvents Label28 As Label
     Friend WithEvents RepairModeBox As ComboBox

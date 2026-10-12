@@ -191,6 +191,7 @@ Public Class MiscellaneousStructures
         Public Costs As UnitCosts_              'relative unit costs of the composite objective (all 0 = EncasedSections.xml)
         Public SkipCtoC As Boolean              'no column-to-column geometric constraint (form: "Column to Column" unchecked)
         Public SkipBtoC As Boolean              'no beam-to-column geometric constraint
+        Public UseFem As Boolean                'optimization with the own FEM solver (final design checked with ETABS); old backups: ETABS
         Public PDelta As Boolean                'P-Delta analysis in the working copy (old backups: model as it is)
         Public RestartEvery As Integer          'ETABS restarted from an .e2k export every N analyses (0 = never; old backups: never)
     End Structure

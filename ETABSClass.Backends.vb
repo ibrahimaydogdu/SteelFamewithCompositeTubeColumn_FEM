@@ -85,11 +85,10 @@ Partial Public Class ETABS_Class
         End Get
     End Property
 
-    'App.config Evaluator = Etabs (default) | Fem. Fem: the optimization runs on the own solver; a model that it cannot handle keeps ETABS.
+    'Form option "FEM solver" (FormInfo.UseFem; App.config Evaluator = Fem | Etabs sets its initial state). Fem: the optimization runs on the own solver; a model that it cannot handle keeps ETABS.
     Private Function SelectEvaluator() As Integer
         Backend = EtabsBackend
-        Dim Mode As String = If(ReadSetting("Evaluator"), "Etabs").Trim().ToLowerInvariant()
-        If Mode <> "fem" Then Return 0
+        If Not FormInfo.UseFem Then Return 0
         Dim Reason As String = Nothing
         Dim B As FemBackend = FemBackend.TryCreate(Me, Reason)
         If B Is Nothing Then

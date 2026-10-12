@@ -198,6 +198,7 @@ Public Class MainForm
     End Function
 
     Private Sub MainForm_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        FemBox.Checked = Not String.Equals(System.Configuration.ConfigurationManager.AppSettings("Evaluator"), "Etabs", StringComparison.OrdinalIgnoreCase)
         If DriftCombos.SelectedIndex < 0 Then DriftCombos.SelectedIndex = MiscellaneousStructures.DriftComboMode_.LateralCasesOnly
         If CompositeCodeBox.SelectedIndex < 0 Then CompositeCodeBox.SelectedIndex = CompositeCode_.AISC360_22
         If CompositeTypeBox.SelectedIndex < 0 Then CompositeTypeBox.SelectedIndex = CompositeType_.FilledTube
@@ -672,6 +673,7 @@ Public Class MainForm
                                                                       .Concrete = ToDbl(CostConcreteBox.Text), .Formwork = ToDbl(CostFormworkBox.Text)}
         FormInfo.AutoCombos = AutoCombos.Checked
         FormInfo.PDelta = PDeltaBox.Checked
+        FormInfo.UseFem = FemBox.Checked
         FormInfo.SkipCtoC = Not CtoC.Checked
         FormInfo.SkipBtoC = Not BtoC.Checked
         FormInfo.DriftComboMode = Math.Max(DriftCombos.SelectedIndex, 0)
@@ -719,6 +721,7 @@ Public Class MainForm
         End If
         AutoCombos.Checked = FormInfo.AutoCombos
         PDeltaBox.Checked = FormInfo.PDelta
+        FemBox.Checked = FormInfo.UseFem
         CtoC.Checked = Not FormInfo.SkipCtoC
         BtoC.Checked = Not FormInfo.SkipBtoC
         DriftCombos.SelectedIndex = FormInfo.DriftComboMode
