@@ -464,6 +464,30 @@ Public Module Program
             End If
             Dim Fem = femS.DesignMembers(Res, Static1, M.Prefs, RSd)
             If Static1.Any(Function(c) c.Nonlinear) Then Fem = femS.DesignNonlinear(Static1, M.Prefs, Fem) : Console.WriteLine("nonlinear combinations designed: " & Static1.Where(Function(c) c.Nonlinear).Count & " (" & sw.ElapsedMilliseconds & " ms in total)")
+            If Not String.IsNullOrEmpty(trc) AndAlso Not String.IsNullOrEmpty(trcCombo) Then
+                Dim cT = M.Combos.FirstOrDefault(Function(c) c.Name = trcCombo)
+                If cT IsNot Nothing AndAlso cT.Nonlinear Then
+                    Dim Rn1 = femS.SolveIterative(cT.Terms)
+                    Console.WriteLine("  consistent iteration failed: " & Rn1.Failed & " " & Rn1.Message)
+                    If Rn1.Failed Then Rn1 = femS.SolveIterative(cT.Terms, Nothing, 40, 0.000001, True)
+                    Console.WriteLine("  lumped iteration failed: " & Rn1.Failed)
+                    Dim eiL As Integer = M.Elements.FindIndex(Function(el) el.Name = trc)
+                    Dim xsL = femS.StationLocations(eiL)
+                    Dim sumL(xsL.Length - 1)() As Double
+                    For j = 0 To xsL.Length - 1 : sumL(j) = New Double(5) {} : Next
+                    For Each t In cT.Terms
+                        Dim pl = M.PatternIndex(t.Name)
+                        If pl < 0 Then Continue For
+                        Dim sp = femS.StationForces(Res, pl, eiL, xsL)
+                        For j = 0 To xsL.Length - 1 : For c = 0 To 5 : sumL(j)(c) += t.Factor * sp(j)(c) : Next : Next
+                    Next
+                    For j = 0 To xsL.Length - 1 : Console.WriteLine("  FEM linear+massPD sta " & xsL(j).ToString("0.000") & " N " & sumL(j)(0).ToString("0.00") & " V2 " & sumL(j)(1).ToString("0.00") & " M3 " & sumL(j)(5).ToString("0.00")) : Next
+                    Dim eiT As Integer = M.Elements.FindIndex(Function(el) el.Name = trc)
+                    Dim xsT = femS.LastIterSolver.StationLocations(eiT)
+                    Dim sfT = femS.LastIterSolver.StationForces(Rn1, 0, eiT, xsT)
+                    For j = 0 To xsT.Length - 1 : Console.WriteLine("  FEM NL sta " & xsT(j).ToString("0.000") & " N " & sfT(j)(0).ToString("0.00") & " V2 " & sfT(j)(1).ToString("0.00") & " V3 " & sfT(j)(2).ToString("0.00") & " M2 " & sfT(j)(4).ToString("0.00") & " M3 " & sfT(j)(5).ToString("0.00")) : Next
+                End If
+            End If
             Console.WriteLine("FEM design of " & M.Elements.Count & " members: " & sw.ElapsedMilliseconds & " ms")
             If Environment.GetEnvironmentVariable("FEM_SCWBDATA") = "1" Then
                 Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
@@ -670,6 +694,15 @@ Public Module Program
                 Sap.SetPresentUnits(eUnits.kN_m_C)
                 NoPDelta()
                 RandomSections(Integer.Parse(sd))
+                If Environment.GetEnvironmentVariable("FEM_NLCASES") = "1" Then
+                    'as the optimizer does (FormInfo.PDelta): nonlinear static cases with P-Delta, preset P-Delta of the linear cases
+                    Dim nC As Integer, cNames() As String = Nothing
+                    Sap.LoadCases.GetNameList(nC, cNames)
+                    For Each cn0 In cNames
+                        Dim ct0 As eLoadCaseType, st00 As Integer
+                        If Sap.LoadCases.GetTypeOAPI(cn0, ct0, st00) = 0 AndAlso ct0 = eLoadCaseType.NonlinearStatic Then Sap.LoadCases.StaticNonlinear.SetGeometricNonlinearity(cn0, 1)
+                    Next
+                End If
                 Sap.Analyze.RunAnalysis() : Sap.DesignSteel.StartDesign()
                 Sap.SetModelIsLocked(False) : Sap.Analyze.RunAnalysis() : Sap.DesignSteel.StartDesign()
                 Dim n2 As Integer, f2() As String = Nothing, rt() As Double = Nothing, rtype() As Integer = Nothing, loc() As Double = Nothing, cb() As String = Nothing, es() As String = Nothing, ws() As String = Nothing
@@ -680,7 +713,8 @@ Public Module Program
                 Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
                 If Sap.DatabaseTables.GetTableForDisplayArray("Steel Column Envelope - AISC 360-22", Nothing, "", tV, tF, tN, tD) = 0 AndAlso tF IsNot Nothing Then
                     Dim iU = Array.IndexOf(tF, "UniqueName"), iC = Array.IndexOf(tF, "SectClass"), iMa = Array.IndexOf(tF, "BCMajor"), iMi = Array.IndexOf(tF, "BCMinor")
-                    For r = 0 To tN - 1 : Env(tD(r * tF.Length + iU)) = New String() {tD(r * tF.Length + iC), tD(r * tF.Length + iMa), tD(r * tF.Length + iMi)} : Next
+                    If iU < 0 Then iU = Array.IndexOf(tF, "Label")
+                    For r = 0 To If(iU < 0, -1, tN - 1) : Env(tD(r * tF.Length + iU)) = New String() {If(iC >= 0, tD(r * tF.Length + iC), ""), If(iMa >= 0, tD(r * tF.Length + iMa), ""), If(iMi >= 0, tD(r * tF.Length + iMi), "")} : Next
                 End If
                 Dim M = New EtabsReader(Sap).Read()
                 If M.Prefs.DirectAnalysis Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
@@ -757,7 +791,8 @@ Public Module Program
             ar.Add(Tuple.Create(x, A1))
         Next
         'section band for the light-design calibration data: from the 15th to the 55th percentile of the section area
-        Dim lightNames As New HashSet(Of String)(ar.OrderBy(Function(t) t.Item2).Skip(CInt(ar.Count * 0.15)).Take(CInt(ar.Count * 0.4)).Select(Function(t) t.Item1))
+        Dim Band() As Double = If(Environment.GetEnvironmentVariable("FEM_BAND"), "0.15,0.55").Split(","c).Select(Function(x) Double.Parse(x, Globalization.CultureInfo.InvariantCulture)).ToArray()
+        Dim lightNames As New HashSet(Of String)(ar.OrderBy(Function(t) t.Item2).Skip(CInt(ar.Count * Band(0))).Take(CInt(ar.Count * (Band(1) - Band(0)))).Select(Function(t) t.Item1))
         Dim n As Integer, fr() As String = Nothing
         Sap.FrameObj.GetNameList(n, fr)
         Dim Pick As New Dictionary(Of String, String)

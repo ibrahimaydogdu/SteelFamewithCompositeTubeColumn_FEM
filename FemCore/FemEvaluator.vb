@@ -143,7 +143,7 @@ Public Class FemEvaluator
     Private Function NonlinearSolution(ByVal Ev As FemEvaluation, ByVal Cmb As FemCombo) As Tuple(Of StaticResults, FemStatic)
         Dim T As Tuple(Of StaticResults, FemStatic) = Nothing
         If Ev.Nonlinear.TryGetValue(Cmb.Name, T) Then Return T
-        Dim R As StaticResults = TrySolveIterative(Ev, Cmb, False)
+        Dim R As StaticResults = TrySolveIterative(Ev, Cmb, Environment.GetEnvironmentVariable("FEM_LUMPED") = "1")
         If R.Failed Then
             'a member whose axial force exceeds its elastic buckling load makes the consistent geometric stiffness indefinite; ETABS P-Delta has
             'no member buckling (P-delta): the case is solved again with the lumped P/L geometric stiffness (the design check shows the overstress)
