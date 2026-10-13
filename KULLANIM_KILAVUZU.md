@@ -129,7 +129,7 @@ Ayar dosyası Not Defteri ile açılıp düzenlenebilir. Yalnızca `value="…"`
 | `SeismicColumnCa` | 0,3 | Süzgeçte kolon gövde sınırı için varsayılan eksenel yük oranı Pu/(phi Py); gerçek Ca daha büyükse kalan durumlar cezayla yakalanır |
 | `DesignRatioLimit` | boş | Çelik ve kompozit kolon tasarımının **D/C oranı sınırı** (bkz. 7.6). Boşsa modelin ETABS tasarım tercihlerindeki değer kullanılır (ETABS varsayılanı 0,95). Bir sayı girilirse (örneğin AISC 360 için 1,0) bu değer çalışma kopyasının tercihlerine yazılır. |
 | `Evaluator` | Fem | Formdaki *FEM solver (fast)* kutusunun ilk durumu (`Fem` = açık, `Etabs` = kapalı). Kapalıyken her aday ETABS'te analiz edilir (referans, yavaş). `Fem` = kendi sonlu eleman çözücüsü (yaklaşık 100 kat hızlı, bkz. 4.6c). Modelin FEM'i desteklemediği durumlarda (alan elemanı, Check Structure vb.) program ETABS'e döner ve nedenini `ErrorLog.txt` dosyasına yazar. **Bu anahtar ortam değişkenini geçersiz kılar.** |
-| `FemRatioMargin` | 1,0 | `Fem` için: FEM D/C oranları bu sayıyla çarpılır. FEM oranları ETABS'ten ortalama %0,4–2,4 düşüktür; 1,01–1,02 son tasarımın ETABS kontrolünü geçme olasılığını artırır (ağırlık yaklaşık %1 artar). |
+| `FemRatioMargin` | 1,01 | `Fem` için: FEM D/C oranları bu sayıyla çarpılır. FEM oranları ETABS'ten kolonlarda ortalama ±%0,5, yanal yük altındaki kirişlerde %0–2,6 düşüktür; varsayılan 1,01 son tasarımın ETABS kontrolünü geçme olasılığını artırır (ağırlık yaklaşık %1 artar), 1,0 = pay yok. |
 | `FemArchiveSize` | 20 | `Fem` için: koşu sırasında tutulan en ucuz uygun tasarım sayısı. En iyi tasarım ETABS'te hafifçe uygunsuzsa final aşamada bunlar ETABS'te (maliyet sırasıyla, en çok 10) denenir. |
 
 Örnek: ETABS `D:\CSI\ETABS 22` klasörüne kurulduysa:
