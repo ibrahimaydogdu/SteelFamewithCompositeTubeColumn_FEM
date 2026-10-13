@@ -1,0 +1,61 @@
+﻿Plan 24 x 24 m (3 x 3 bays), 5 stories, height 18.9 m
+System: Perimeter (interior column base Fixed), group band 1 stories
+Columns 80, beams 120 (moment 60, pinned 60), floor areas 45
+Groups: 15 column, 10 beam (25 design variables)
+  COL-CORNER-S01-01             4 members, stories 1-1
+  COL-EDGE-S01-01               8 members, stories 1-1
+  COL-INTERIOR-S01-01           4 members, stories 1-1
+  BM-EDGE-L8000-S01-01         12 members, stories 1-1
+  BM-INT-L8000-S01-01          12 members, stories 1-1
+  COL-CORNER-S02-02             4 members, stories 2-2
+  COL-EDGE-S02-02               8 members, stories 2-2
+  COL-INTERIOR-S02-02           4 members, stories 2-2
+  BM-EDGE-L8000-S02-02         12 members, stories 2-2
+  BM-INT-L8000-S02-02          12 members, stories 2-2
+  COL-CORNER-S03-03             4 members, stories 3-3
+  COL-EDGE-S03-03               8 members, stories 3-3
+  COL-INTERIOR-S03-03           4 members, stories 3-3
+  BM-EDGE-L8000-S03-03         12 members, stories 3-3
+  BM-INT-L8000-S03-03          12 members, stories 3-3
+  COL-CORNER-S04-04             4 members, stories 4-4
+  COL-EDGE-S04-04               8 members, stories 4-4
+  COL-INTERIOR-S04-04           4 members, stories 4-4
+  BM-EDGE-L8000-S04-04         12 members, stories 4-4
+  BM-INT-L8000-S04-04          12 members, stories 4-4
+  COL-CORNER-S05-05             4 members, stories 5-5
+  COL-EDGE-S05-05               8 members, stories 5-5
+  COL-INTERIOR-S05-05           4 members, stories 5-5
+  BM-EDGE-L8000-S05-05         12 members, stories 5-5
+  BM-INT-L8000-S05-05          12 members, stories 5-5
+
+Gravity loads: slab 3 + superimposed dead 1.2 kPa (roof 1.2), cladding 4 kN/m, live 2.4 + partitions 0.72 kPa, roof live 0.96 kPa, no snow
+Floor area 576 m2 per story (the slab is not modeled; floor loads act on the beams, rigid diaphragm D1)
+Wind X: V 49 m/s, exposure C, Kzt 1, G 0.85, L/B 1.00 (leeward Cp -0.50), qh 1.684 kPa, base shear 685 kN
+Wind Y: V 49 m/s, exposure C, Kzt 1, G 0.85, L/B 1.00 (leeward Cp -0.50), qh 1.684 kPa, base shear 685 kN
+Wind pressures (without the 16 psf minimum scaling where it does not apply):
+  WX story 1 z 4.5 m: windward 0.850 kPa, leeward 0.716 kPa
+  WX story 2 z 8.1 m: windward 0.958 kPa, leeward 0.716 kPa
+  WX story 3 z 11.7 m: windward 1.035 kPa, leeward 0.716 kPa
+  WX story 4 z 15.3 m: windward 1.096 kPa, leeward 0.716 kPa
+  WX story 5 z 18.9 m: windward 1.145 kPa, leeward 0.716 kPa
+  WY story 1 z 4.5 m: windward 0.850 kPa, leeward 0.716 kPa
+  WY story 2 z 8.1 m: windward 0.958 kPa, leeward 0.716 kPa
+  WY story 3 z 11.7 m: windward 1.035 kPa, leeward 0.716 kPa
+  WY story 4 z 15.3 m: windward 1.096 kPa, leeward 0.716 kPa
+  WY story 5 z 18.9 m: windward 1.145 kPa, leeward 0.716 kPa
+Mass source: self mass + SDL + PartMass; modal case Modal with 12 modes
+Response spectrum: ASCE 7-22 design spectrum SDS 1 g, SD1 0.6 g, TL 8 s, site class D; cases RSX, RSY (scale factor Ie g / R = 1.2258 m/s2, R 8, Ie 1; CQC, SRSS, eccentricity 0.05)
+Load combinations (ASCE 7-22 2.3.1 and 2.3.6, f1 = 0.5, rho 1, 0.2 SDS = 0.2): 35 combinations, all selected for the AISC 360-22 steel and composite column designs
+Design settings (AISC 360-22): SMF, seismic design category D (risk category II), R 8, Omega0 3, Cd 5.5, LRFD, Direct Analysis Method, AISC 341 seismic provisions ON (strong column - weak beam etc. are checked)
+Beam lateral bracing: spacing 2.5 m, 120 of 120 beams divided into equal unbraced lengths (design overwrites LMinor and LTB)
+Pre-sizing (7 modal analyses): relative pool index 0.766, beams W690X384, columns W360X509, T 0.877 s (limit Cu Ta = 1.064 s)
+Modal analysis: 12 modes, T1 0.877 s, T2 0.798 s, T3 0.585 s; x mode 2 T 0.798 s (87 %), y mode 1 T 0.877 s (88 %); cumulative mass participation x 99.8 %, y 100.0 %
+Seismic weight W 20071 kN; equivalent lateral force: x T 0.798 s (Ta 0.760, Cu 1.40) Cs 0.0940 V 1887 kN; y T 0.877 s Cs 0.0855 V 1716 kN
+Response spectrum base shear before scaling: x 1644 kN (87.1 % of V), y 1536 kN (89.5 % of V); target 100 %
+Response spectrum scale factors x 1.1480, y 1.1170 (scale factors of the cases 1.4072, 1.3692 m/s2); base shear now x 1887 kN, y 1716 kN
+Note: the response spectrum scale factors are fixed numbers computed for the building of the check above (sections of the pre-sizing). In the optimization the stiffness changes with the sections, so the base shear ratio changes; a design-dependent scaling (ASCE 7-22 12.9.1.4 for every analysis) is not part of the optimization program yet.
+Seismic drift amplification of the optimization program (App.config SeismicDriftAmplification) = Cd / Ie = 5.5 / 1 = 5.5; story drift limit 0.02 hsx, wind service drift limit H / 400
+Wind base shear (ASCE 7-22 Chapter 27): x 685 kN, y 685 kN (strength level, load factor 1.0 in the combinations)
+Model check done in 32 s
+Members set back to the median sections of the pools (beams W840X226, columns W360X287); they are placeholders, the optimization program sizes the members
+Beam lateral bracing: spacing 2.5 m, 120 of 120 beams divided into equal unbraced lengths (design overwrites LMinor and LTB)

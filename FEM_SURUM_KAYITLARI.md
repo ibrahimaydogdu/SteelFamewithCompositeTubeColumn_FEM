@@ -181,3 +181,12 @@ Neler: profil (skyline) Cholesky + ters Cuthill-McKee numaralandırma (yoğun 13
 **525M doğrulaması (3 rastgele tasarım, ağır kesit bandı, 1575 üye; ETABS'te doğrusal olmayan durumlarda P-Δ açık, iyileştiricideki gibi):** D/C oranı FEM − ETABS: kolonlar yerçekimi +%0,4, rüzgâr %0,0 / −%0,1 (%95: ≤ +%2,2); kirişler yerçekimi −%0,2, rüzgâr −%1,6 / −%2,6 (en büyük |%8|). Genel ortalama −%1,0, %95: +%1,2, %5: −%3,8. Kirişlerdeki küçük eksiklik eksenel kuvvetle ilişkili değil (Pu/Py < %0,5; korelasyon 0,02), sabit 8 m kirişlerde yanal yüklerde kalıyor; üye kuvvetleri ETABS ile aynı (iz karşılaştırması: M3 587,48 = 587,48). Nedeni çözülemedi. Önlem: `FemRatioMargin` varsayılanı 1,0 → **1,01** (P4'te FEM +%0,1, 525M'de −%1,0 ortalama).
 
 **Test uyarısı (yanlış alarm):** `calibdump` ilk 525M verisinde ETABS'in doğrusal olmayan durumlarında P-Δ kapalıydı; FEM rüzgâr kombinasyonlarında +%5–16 yüksek göründü (ETABS kuvvetleri doğrusal + kütle P-Δ ile birebir aynıydı). İyileştirici bu durumları açar; `FEM_NLCASES=1` ile aynı ayar verildiğinde fark kayboldu. Tutarlı geometrik rijitlik bu tasarımlarda kararsız (eleman burkulması) olup topaklı P/L yedeği kullanılıyor; sonuçlar ETABS'le uyumlu.
+
+**Spektrumlu ModelBuilder örnekleri (`Modeller/ModelBuilder_Ornekleri/`: E05_P, E10_P, E15_P, E20_P, E10_S; ASCE 7-22 spektrumu, RSX/RSY, kazara dışmerkezlik, P-Δ; 4 model × 3 rastgele tasarım, ETABS P-Δ açık):**
+| Model | Üye | D/C FEM − ETABS (ETABS oranı > 0,05) | ETABS oranı > 0,3 | SCWB (rms / en büyük) | Sismik hata işareti uyumu |
+|---|---|---|---|---|---|
+| E10_P (10 kat) | 1200 | ort. +%0,08, %95: +%0,8, en büyük %1,8 | en büyük %1,2 | %0,07 / %0,1 | %98,0 |
+| E15_P (15 kat) | 1800 | ort. −%0,03, %95: +%0,2, en büyük %13 (tek üye) | en büyük %1,4 | %0,12 / %0,5 | %99,1 |
+| E20_P (20 kat) | 3900 | ort. +%0,01, %95: +%0,3, en büyük %1,9 | en büyük %1,2 | %0,07 / %0,2 | %98,9 |
+| E10_S (10 kat, uzay çerçeve) | 1200 | ort. −%0,42, %5: −%8,5, %95: +%3,6 | %5: −%6,3 | %0,07 / %0,2 | %98,7 |
+Uzay çerçevedeki geniş dağılım, düşük kullanımlı yerçekimi kirişlerinde (C2_Lr, oran 0,08; FEM −%6) toplanıyor; belirleyici üyelerde (ETABS oranı > 0,7) fark ort. +%0,08, en büyük %0,7. Çevre çerçevelerde (spektrumlu, P-Δ'lı, 20 kata kadar) hedef (ort. ≤ %1, %95 ≤ %2, en büyük ≤ %5) karşılandı.

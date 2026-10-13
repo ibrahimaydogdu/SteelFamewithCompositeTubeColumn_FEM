@@ -1,0 +1,6 @@
+﻿Name,Model,Method,Mode,MaxAnalyses,MemorySize,Seed,Transition,AbcLimit
+E05_P,C:\mb\out\E05_P.EDB,HarmornySearch,Steel,500,20,1,,
+E10_P,C:\mb\out\E10_P.EDB,HarmornySearch,Steel,500,20,1,,
+E15_P,C:\mb\out\E15_P.EDB,HarmornySearch,Steel,500,20,1,,
+E20_P,C:\mb\out\E20_P.EDB,HarmornySearch,Steel,500,20,1,,
+E10_S,C:\mb\out\E10_S.EDB,HarmornySearch,Steel,500,20,1,,
