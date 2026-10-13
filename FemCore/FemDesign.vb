@@ -170,7 +170,7 @@ Public Module SteelDesign
     'web h / tw limit with Ca = Pu / (phi Py)
     Public Const RyAisc As Double = 1.1
     'Calibration against ETABS (borderline columns are flagged by ETABS at about 1.2-1.25 times the Ca computed from the envelope axial force)
-    Public Const CaCalibration As Double = 1.25
+    Public Const CaCalibration As Double = 1.1
 
     Public Function SeismicCompact(ByVal S As FemSection, ByVal High As Boolean, ByVal CaIn As Double) As Boolean
         Dim Ca As Double = CaIn * CaCalibration

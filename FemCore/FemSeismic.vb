@@ -7,8 +7,14 @@ Partial Public Class FemStatic
     'ETABS fit (P4, random designs, 133 joints, rms 0.5 %): ratio = sum Mpb / sum Mpc with
     '  Mpb = C0 Fy Zb (1 + C1 off / L)    (beam in the plane of the column axis, moment connection at the joint, off: end offset, L: joint to joint length)
     '  Mpc = Zc (Fy - Pu / Ag)            (column below and column above the joint; Z about the axis of the plane; Pu: largest compression)
-    Public Const ScwbC0 As Double = 1.5335
-    Public Const ScwbC1 As Double = 2.23
+    Public Const ScwbC0 As Double = 1.5347
+    Public Const ScwbC1 As Double = 2.2542
+
+    'Axial force of the AISC 341 checks: ETABS uses the combinations with the response spectrum cases only (fit on 1113 column ratios: gravity
+    'combinations get the weight -0.02); without a response spectrum case the largest compression of all combinations
+    Public Function PuAisc341(ByVal R As MemberRatios) As Double
+        Return If(M.RSCases.Count > 0, R.PuSeis, R.PuMax)
+    End Function
 
     Public Above() As Integer                                   'column above the top joint of every column (-1: none), set by StrongColumnWeakBeam
 
@@ -59,7 +65,7 @@ Partial Public Class FemStatic
                 For Each cc In {ci, above}
                     Dim c = M.Elements(cc)
                     Dim z As Double = If(plane = 0, c.Section.Z33, c.Section.Z22)
-                    sumC += z * (c.Section.Fy - Fem(cc).PuMax / c.Section.A)
+                    sumC += z * (c.Section.Fy - PuAisc341(Fem(cc)) / c.Section.A)
                 Next
                 If sumC <= 0 Then Continue For
                 If plane = 0 Then Major(ci) = sumB / sumC Else Minor(ci) = sumB / sumC

@@ -70,13 +70,27 @@ Public Class FemEvaluator
     'force of the design combinations) and beams with Lb / ry above the limit
     Public Function SeismicErrors(ByVal Ev As FemEvaluation, ByVal High As Boolean) As Boolean()
         Dim Res(Model.Elements.Count - 1) As Boolean
+        'a column belongs to the moment frame only if a moment connected beam frames into its top joint (ETABS: columns without one are not checked;
+        '1344 + 1680 members of random designs, 0 differences)
+        Dim MomentAtNode As New HashSet(Of Integer)
+        For Each b In Model.Elements
+            If Math.Abs(b.Axes(0, 2)) > 0.9 Then Continue For
+            If Not (b.ReleaseI(4) OrElse b.ReleaseI(5)) Then MomentAtNode.Add(b.NI)
+            If Not (b.ReleaseJ(4) OrElse b.ReleaseJ(5)) Then MomentAtNode.Add(b.NJ)
+        Next
         For ei = 0 To Model.Elements.Count - 1
             Dim el = Model.Elements(ei)
             If el.Section Is Nothing OrElse el.Section.A <= 0 OrElse el.Section.NoDesign Then Continue For
             Dim isCol As Boolean = Math.Abs(el.Axes(0, 2)) > 0.9
             Dim moment As Boolean = isCol OrElse Not (el.ReleaseI(4) OrElse el.ReleaseI(5) OrElse el.ReleaseJ(4) OrElse el.ReleaseJ(5))
             If Not moment Then Continue For
-            Dim Ca As Double = Ev.Members(ei).PuMax / (0.9 * el.Section.Fy * el.Section.A)
+            If isCol Then
+                'a column without a moment connected beam at its top joint is checked only if it is the top column of its line (3024 members of
+                'random designs: 20 differences)
+                Dim top As Integer = If(Model.Nodes(el.NI).Z > Model.Nodes(el.NJ).Z, el.NI, el.NJ)
+                If Not MomentAtNode.Contains(top) AndAlso ColumnAbove(top, ei) Then Continue For
+            End If
+            Dim Ca As Double = Ev.Solver.PuAisc341(Ev.Members(ei)) / (0.9 * el.Section.Fy * el.Section.A)
             Dim Bad As Boolean = Not SteelDesign.SeismicCompact(el.Section, High, Ca)
             If Not isCol Then
                 Dim Lb As Double = If(el.UnbracedLTB > 0, el.UnbracedLTB, el.Length - el.OffsetI - el.OffsetJ)
@@ -85,6 +99,15 @@ Public Class FemEvaluator
             Res(ei) = Bad
         Next
         Return Res
+    End Function
+
+    Private Function ColumnAbove(ByVal Node As Integer, ByVal Self As Integer) As Boolean
+        For i = 0 To Model.Elements.Count - 1
+            Dim e = Model.Elements(i)
+            If i = Self OrElse Math.Abs(e.Axes(0, 2)) <= 0.9 OrElse (e.NI <> Node AndAlso e.NJ <> Node) Then Continue For
+            If Model.Nodes(If(e.NI = Node, e.NJ, e.NI)).Z > Model.Nodes(Node).Z Then Return True
+        Next
+        Return False
     End Function
 
     'All members of the group get the section
@@ -143,8 +166,11 @@ Public Class FemEvaluator
 
     'Station forces (N tension +, V2, V3, T, M2, M3 per station; kN, m) of one member for all design combinations: one set for a static
     'combination, two (static + RS, static - RS) for a combination with response spectrum cases. Xs: the stations.
+    Public LastNames As List(Of String)        'names of the sets returned by the last CombinationForces call
+
     Public Function CombinationForces(ByVal Ev As FemEvaluation, ByVal ei As Integer, ByRef Xs() As Double) As List(Of Double()())
         Dim Res As New List(Of Double()())
+        LastNames = New List(Of String)
         Dim S As FemStatic = Ev.Solver
         Xs = S.StationLocations(ei)
         For Each cmb In Model.Combos.Where(Function(x) Model.DesignCombos.Contains(x.Name))
@@ -153,7 +179,7 @@ Public Class FemEvaluator
                 Dim T = NonlinearSolution(Ev, cmb)
                 If T.Item1.Failed Then Continue For
                 Sf = T.Item2.StationForces(T.Item1, 0, ei, Xs)
-                Res.Add(Sf)
+                Res.Add(Sf) : LastNames.Add(cmb.Name)
                 Continue For
             End If
             Sf = New Double(Xs.Length - 1)() {}
@@ -164,7 +190,7 @@ Public Class FemEvaluator
                 Dim sp = S.StationForces(Ev.StaticRes, p, ei, Xs)
                 For j = 0 To Xs.Length - 1 : For c = 0 To 5 : Sf(j)(c) += t.Factor * sp(j)(c) : Next : Next
             Next
-            If cmb.RSTerms.Count = 0 Then Res.Add(Sf) : Continue For
+            If cmb.RSTerms.Count = 0 Then Res.Add(Sf) : LastNames.Add(cmb.Name) : Continue For
             Dim Mag(Xs.Length - 1)() As Double
             For j = 0 To Xs.Length - 1 : Mag(j) = New Double(5) {} : Next
             For Each rt In cmb.RSTerms
@@ -179,7 +205,7 @@ Public Class FemEvaluator
                     S2(j) = New Double(5) {}
                     For c = 0 To 5 : S2(j)(c) = Sf(j)(c) + sg * Mag(j)(c) : Next
                 Next
-                Res.Add(S2)
+                Res.Add(S2) : LastNames.Add(cmb.Name & If(sg > 0, "+", "-"))
             Next
         Next
         Return Res
@@ -250,6 +276,15 @@ Public Class FemEvaluator
             Next
             Ev.Members = Fem
             Ev.Solver.StrongColumnWeakBeam(Fem, Ev.BCMajor, Ev.BCMinor)
+            'ETABS reports the beam/column ratio of a column only when its governing combination is a seismic one (response spectrum): 439 of 439
+            'such columns have a value, 82 of 82 with another governing combination (gravity, wind) have none
+            If Model.RSCases.Count > 0 Then
+                For ei = 0 To Model.Elements.Count - 1
+                    Dim gc As String = Fem(ei).PMMCombo
+                    Dim cmb = If(gc Is Nothing, Nothing, FindCombo(gc))
+                    If cmb Is Nothing OrElse cmb.RSTerms.Count = 0 Then Ev.BCMajor(ei) = 0 : Ev.BCMinor(ei) = 0
+                Next
+            End If
             Ev.Above = Ev.Solver.Above
         Finally
             c.Stop()

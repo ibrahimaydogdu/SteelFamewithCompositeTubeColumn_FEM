@@ -23,6 +23,8 @@ Public Module Program
             End If
             If args(0) = "selftest" Then
                 SelfTest()
+            ElseIf args(0) = "calibdump" Then
+                CalibDump(args(1), args(2), args(3))
             ElseIf args(0) = "combos" Then
                 StartEtabs()
                 Try
@@ -654,11 +656,108 @@ Public Module Program
         Console.WriteLine(FemProfile.Report())
     End Sub
 
+    'Calibration data: random designs analysed and designed by ETABS and by the FEM; one JSON line per member (ETABS results next to the
+    'FEM geometry, section data and the largest compression of every design combination). args: model, output file, seeds "1,2,3"
+    Private Sub CalibDump(ByVal File As String, ByVal OutFile As String, ByVal Seeds As String)
+        StartEtabs()
+        Dim Inv = Globalization.CultureInfo.InvariantCulture
+        Dim Q = Function(x As String) """" & If(x, "").Replace("\", "/").Replace("""", "'").Replace(vbCr, " ").Replace(vbLf, " ").Trim() & """"
+        Dim Fm = Function(x As Double) x.ToString("R", Inv)
+        Try
+            For Each sd In Seeds.Split(","c)
+                Console.WriteLine("open " & Sap.File.OpenFile(File))
+                Sap.SetModelIsLocked(False)        'a reopened model keeps its results: locked, SetSection would do nothing
+                Sap.SetPresentUnits(eUnits.kN_m_C)
+                NoPDelta()
+                RandomSections(Integer.Parse(sd))
+                Sap.Analyze.RunAnalysis() : Sap.DesignSteel.StartDesign()
+                Sap.SetModelIsLocked(False) : Sap.Analyze.RunAnalysis() : Sap.DesignSteel.StartDesign()
+                Dim n2 As Integer, f2() As String = Nothing, rt() As Double = Nothing, rtype() As Integer = Nothing, loc() As Double = Nothing, cb() As String = Nothing, es() As String = Nothing, ws() As String = Nothing
+                Sap.DesignSteel.GetSummaryResults("All", n2, f2, rt, rtype, loc, cb, es, ws, eItemType.Group)
+                Dim Eres As New Dictionary(Of String, Integer)
+                For i = 0 To n2 - 1 : Eres(f2(i)) = i : Next
+                Dim Env As New Dictionary(Of String, String())
+                Dim tV, tN As Integer, tF() As String = Nothing, tD() As String = Nothing
+                If Sap.DatabaseTables.GetTableForDisplayArray("Steel Column Envelope - AISC 360-22", Nothing, "", tV, tF, tN, tD) = 0 AndAlso tF IsNot Nothing Then
+                    Dim iU = Array.IndexOf(tF, "UniqueName"), iC = Array.IndexOf(tF, "SectClass"), iMa = Array.IndexOf(tF, "BCMajor"), iMi = Array.IndexOf(tF, "BCMinor")
+                    For r = 0 To tN - 1 : Env(tD(r * tF.Length + iU)) = New String() {tD(r * tF.Length + iC), tD(r * tF.Length + iMa), tD(r * tF.Length + iMi)} : Next
+                End If
+                Dim M = New EtabsReader(Sap).Read()
+                If M.Prefs.DirectAnalysis Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
+                Dim Ev As New FemEvaluator(M) With {.MassPDelta = True}
+                Dim R1 = Ev.Analyze()
+                If R1.Failed Then Console.WriteLine("seed " & sd & ": FEM failed " & R1.Message) : Continue For
+                Ev.Design(R1)
+                Dim FemErr = Ev.SeismicErrors(R1, True)
+                Dim sb As New System.Text.StringBuilder
+                For ei = 0 To M.Elements.Count - 1
+                    Dim el = M.Elements(ei), S = el.Section
+                    Dim isCol As Boolean = Math.Abs(el.Axes(0, 2)) > 0.9
+                    Dim Xs() As Double = Nothing
+                    Dim Sets = Ev.CombinationForces(R1, ei, Xs)
+                    Dim pu As New List(Of String)
+                    For k = 0 To Sets.Count - 1
+                        Dim mx As Double = 0
+                        For j = 0 To Xs.Length - 1 : mx = Math.Max(mx, -Sets(k)(j)(0)) : Next
+                        pu.Add(Q(Ev.LastNames(k)) & ":" & Fm(mx))
+                    Next
+                    sb.Append("{""seed"":" & sd & ",""f"":" & Q(el.Name) & ",""col"":" & If(isCol, "1", "0") & ",""sec"":" & Q(S.Name) & ",""grp"":" & Q(el.Group))
+                    sb.Append(",""d"":" & Fm(S.Depth) & ",""bf"":" & Fm(S.Width) & ",""tf"":" & Fm(S.FlangeThickness) & ",""tw"":" & Fm(S.WebThickness) & ",""fil"":" & Fm(S.Fillet) & ",""A"":" & Fm(S.A) & ",""Z33"":" & Fm(S.Z33) & ",""Z22"":" & Fm(S.Z22) & ",""r22"":" & Fm(S.R22) & ",""Fy"":" & Fm(S.Fy) & ",""E"":" & Fm(S.E))
+                    sb.Append(",""len"":" & Fm(el.Length) & ",""offI"":" & Fm(el.OffsetI) & ",""offJ"":" & Fm(el.OffsetJ) & ",""ltb"":" & Fm(el.UnbracedLTB))
+                    sb.Append(",""relI"":" & Q(String.Join("", Enumerable.Range(0, 6).Select(Function(d) If(el.ReleaseI(d), "1", "0")))) & ",""relJ"":" & Q(String.Join("", Enumerable.Range(0, 6).Select(Function(d) If(el.ReleaseJ(d), "1", "0")))))
+                    sb.Append(",""femErr"":" & If(FemErr(ei), "1", "0") & ",""femPMM"":" & Fm(R1.Members(ei).PMM) & ",""femBC"":[" & Fm(R1.BCMajor(ei)) & "," & Fm(R1.BCMinor(ei)) & "],""above"":" & R1.Above(ei) & ",""pu"":{" & String.Join(",", pu) & "}")
+                    Dim ie As Integer
+                    If Eres.TryGetValue(el.Name, ie) Then sb.Append(",""etRatio"":" & Fm(rt(ie)) & ",""etCombo"":" & Q(cb(ie)) & ",""etErr"":" & Q(es(ie)))
+                    Dim ev1() As String = Nothing
+                    If Env.TryGetValue(el.Name, ev1) Then sb.Append(",""etClass"":" & Q(ev1(0)) & ",""etBC"":[" & Q(ev1(1)) & "," & Q(ev1(2)) & "]")
+                    If isCol Then
+                        Dim top As Integer = If(M.Nodes(el.NI).Z > M.Nodes(el.NJ).Z, el.NI, el.NJ)
+                        Dim bl As New List(Of String)
+                        For bi = 0 To M.Elements.Count - 1
+                            Dim b = M.Elements(bi)
+                            If Math.Abs(b.Axes(0, 2)) > 0.9 OrElse (b.NI <> top AndAlso b.NJ <> top) Then Continue For
+                            Dim atI As Boolean = (b.NI = top)
+                            Dim rel = If(atI, b.ReleaseI, b.ReleaseJ)
+                            Dim along2 As Double = Math.Abs(b.Axes(0, 0) * el.Axes(1, 0) + b.Axes(0, 1) * el.Axes(1, 1))
+                            bl.Add("{""b"":" & Q(b.Name) & ",""Z33"":" & Fm(b.Section.Z33) & ",""Fy"":" & Fm(b.Section.Fy) & ",""off"":" & Fm(If(atI, b.OffsetI, b.OffsetJ)) & ",""L"":" & Fm(b.Length) & ",""mom"":" & If(rel(4) OrElse rel(5), "0", "1") & ",""al2"":" & Fm(along2) & ",""sec"":" & Q(b.Section.Name) & "}")
+                        Next
+                        sb.Append(",""beams"":[" & String.Join(",", bl) & "]")
+                        If R1.Above(ei) >= 0 Then
+                            Dim ab = M.Elements(R1.Above(ei))
+                            Dim Xa() As Double = Nothing
+                            Dim Sa = Ev.CombinationForces(R1, R1.Above(ei), Xa)
+                            Dim pa As New List(Of String)
+                            For k = 0 To Sa.Count - 1
+                                Dim mx As Double = 0
+                                For j = 0 To Xa.Length - 1 : mx = Math.Max(mx, -Sa(k)(j)(0)) : Next
+                                pa.Add(Q(Ev.LastNames(k)) & ":" & Fm(mx))
+                            Next
+                            sb.Append(",""ab"":{""sec"":" & Q(ab.Section.Name) & ",""Z33"":" & Fm(ab.Section.Z33) & ",""Z22"":" & Fm(ab.Section.Z22) & ",""A"":" & Fm(ab.Section.A) & ",""Fy"":" & Fm(ab.Section.Fy) & ",""pu"":{" & String.Join(",", pa) & "}}")
+                        End If
+                    End If
+                    sb.AppendLine("}")
+                Next
+                IO.File.AppendAllText(OutFile, sb.ToString())
+                Console.WriteLine("seed " & sd & ": " & M.Elements.Count & " members written")
+            Next
+        Finally
+            StopEtabs()
+        End Try
+    End Sub
+
     Private Sub RandomSections(ByVal Seed As Integer)
         Dim rnd As New Random(Seed)
         Dim nS As Integer, sn() As String = Nothing
         Sap.PropFrame.GetNameList(nS, sn, eFramePropType.I)
         Dim names = sn.Where(Function(x) x.StartsWith("W")).ToList()
+        Dim ar As New List(Of Tuple(Of String, Double))
+        For Each x In names
+            Dim A1, As2, As3, J1, I22, I33, S22, S33, Z22, Z33, R22, R33 As Double
+            Sap.PropFrame.GetSectProps(x, A1, As2, As3, J1, I22, I33, S22, S33, Z22, Z33, R22, R33)
+            ar.Add(Tuple.Create(x, A1))
+        Next
+        'section band for the light-design calibration data: from the 15th to the 55th percentile of the section area
+        Dim lightNames As New HashSet(Of String)(ar.OrderBy(Function(t) t.Item2).Skip(CInt(ar.Count * 0.15)).Take(CInt(ar.Count * 0.4)).Select(Function(t) t.Item1))
         Dim n As Integer, fr() As String = Nothing
         Sap.FrameObj.GetNameList(n, fr)
         Dim Pick As New Dictionary(Of String, String)
@@ -668,7 +767,7 @@ Public Module Program
             Dim g As String = String.Join("/", gn.Where(Function(x) x <> "All"))
             If Not Pick.ContainsKey(g) Then
                 Dim isCol As Boolean = g.StartsWith("COL")
-                Dim pool = names.Where(Function(x) If(isCol, (x.StartsWith("W310") OrElse x.StartsWith("W360")), True)).ToList()
+                Dim pool = names.Where(Function(x) If(Environment.GetEnvironmentVariable("FEM_RANDLIGHT") = "1", lightNames.Contains(x), If(isCol AndAlso Environment.GetEnvironmentVariable("FEM_RANDALL") <> "1", (x.StartsWith("W310") OrElse x.StartsWith("W360")), True))).ToList()
                 Pick(g) = pool(rnd.Next(pool.Count))
             End If
             Sap.FrameObj.SetSection(f, Pick(g))
