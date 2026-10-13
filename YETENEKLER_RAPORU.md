@@ -1,6 +1,8 @@
 # YETENEKLER RAPORU — Programın ne yapabildiği, neyi yapamadığı ve makale kapsamı için seçenekler
 
-Sürüm 0.5.1 · 2026-10-09 · Depo: `ibrahimaydogdu/SteelFamewithCompositeTubeColumn_ETABS`
+Sürüm 0.5.1 + FEM çözücü · 2026-10-13 · Depo: `ibrahimaydogdu/SteelFamewithCompositeTubeColumn_FEM` (ETABS tabanlı sürüm: `…_ETABS`)
+
+> **2026-10-13 güncellemesi:** program artık optimizasyon sırasında ETABS yerine kendi sonlu eleman (FEM) çözücüsünü kullanabiliyor (varsayılan); ETABS modeli okumak, ilk sınır tasarımı ve **final doğrulama** için çalışıyor. Bu, değerlendirme hızını yaklaşık **100 kat** artırdı (Bölüm 16) ve Bölüm 13'teki hesap yükü tahminlerini, Bölüm 14'teki seçeneklerin uygulanabilirliğini değiştirdi. Bölüm 1, 7, 11, 12, 13, 14 ve 15 buna göre güncellendi; ayrıntı Bölüm 16'dadır.
 
 **Bu rapor ne için:** makalenin konusu ve kapsamı belirlenirken programın **gerçekte** neyi yapabildiğinin tek yerde görülmesi. Her bölümde şunlar ayrıdır: *var ve doğrulandı*, *var ama sınırlı*, *yok*. Sonuçlar yalnızca `DEGISIKLIKLER.md`'de kayıtlı koşulardan alınmıştır; kayıtta olmayan bir şey iddia edilmez. Ayrıntılı kullanım için `KULLANIM_KILAVUZU.md`, `ModelBuilder/README.md` ve `PROGRAM_KURALLARI.md` kaynak alınmalıdır.
 
@@ -20,6 +22,7 @@ Sürüm 0.5.1 · 2026-10-09 · Depo: `ibrahimaydogdu/SteelFamewithCompositeTubeC
 13. [Süre ve kaynak tahminleri](#13-süre-ve-kaynak-tahminleri)
 14. [Makale kapsamı için seçenekler](#14-makale-kapsamı-için-seçenekler)
 15. [Karar gerektiren açık noktalar](#15-karar-gerektiren-açık-noktalar)
+16. [FEM çözücülü sürüm: yetenekler, hız ve doğruluk](#16-fem-çözücülü-sürüm-yetenekler-hız-ve-doğruluk)
 
 ---
 
@@ -27,18 +30,19 @@ Sürüm 0.5.1 · 2026-10-09 · Depo: `ibrahimaydogdu/SteelFamewithCompositeTubeC
 
 | Konu | Durum |
 |---|---|
-| Ne yapar | ETABS 22 modelindeki tasarım gruplarına ayrık kesit atar; her aday tasarım ETABS'te analiz edilir ve tasarlanır |
+| Ne yapar | ETABS 22 modelindeki tasarım gruplarına ayrık kesit atar; her aday tasarım **kendi FEM çözücüsüyle** (varsayılan) veya ETABS'te analiz edilir ve tasarlanır; en iyi tasarım ETABS'te doğrulanır |
 | Optimizasyon yöntemi | 16 metasezgisel yöntem, aynı değerlendirme altyapısı |
 | Kolon türleri | Çelik (W), beton dolgulu tüp (CFT/CFP), gömülü kompozit (W + beton + donatı), **hibrit** (grup grup çelik/kompozit, geçiş katı optimize edilir) |
-| Çelik tasarımı | ETABS AISC 360-22 / 360-16 / 360-10 (ETABS 19'da 360-10) |
+| Çelik tasarımı | FEM sürümünde AISC 360-22 (kendi kodu, ETABS'e karşı doğrulandı); ETABS modunda ETABS AISC 360-22 / 360-16 / 360-10 |
+| Değerlendirici | `FEM` (kendi çözücü, ~0,15–0,4 s/tasarım) veya `Etabs` (14–50 s/tasarım); formda *FEM solver (fast)* kutusu, toplu modda `Evaluator` sütunu |
 | Kompozit tasarımı | Program içi hızlı çözücü (arama sırasında) + ETABS kompozit kolon tasarımı (final doğrulama) |
 | Deprem hükümleri | AISC 341: güçlü kolon–zayıf kiriş (sürekli kısıt), kesit süneklik süzgeci, Lb/ry |
 | Örnek üretimi | `ModelBuilder`: CSV tablosundan ASCE 7-22 yüklü, kombinasyonlu, gruplanmış parametrik çerçeve modelleri |
 | Toplu koşu | `tools/RunBatch.ps1`: çok sayıda koşuyu paralel (varsayılan 3 ETABS) yürütür |
-| Platform | Windows, .NET Framework 4.7.2, **ETABS 22 lisanslı kurulu olmalı** (program ETABS'siz çalışmaz) |
+| Platform | Windows, .NET Framework 4.7.2, **ETABS 22 lisanslı kurulu olmalı** (model okuma, ilk sınır tasarımı ve final doğrulama için; arama döngüsü ETABS'siz çalışır). Çok çekirdekli işlemci hızı artırır (8 çekirdekte ölçüldü) |
 | Yan ürün | ETABS'siz matematik test problemi (*Test Math*) ile yöntemlerin kendi başına karşılaştırılması |
 
-**Tek cümlelik özet:** program, ETABS'i değerlendirme çekirdeği olarak kullanan, 16 yöntemli, çelik/kompozit/hibrit kolonları ve AISC 341 deprem şartlarını destekleyen bir kesit optimizasyon çerçevesidir; maliyeti, her tasarımın ETABS'te gerçekten analiz edilmesidir (4 katlı örnekte analiz başına ~14 s, 25 katlı 525M modelinde ~35 s).
+**Tek cümlelik özet:** program, kendi FEM çözücüsüyle (ETABS'e karşı kalibre edilmiş, final tasarım ETABS'te doğrulanan) değerlendirme yapan — ETABS modunda ETABS'i değerlendirme çekirdeği olarak kullanabilen —, 16 yöntemli, çelik/kompozit/hibrit kolonları ve AISC 341 deprem şartlarını destekleyen bir kesit optimizasyon çerçevesidir; maliyeti, her tasarımın ETABS'te gerçekten analiz edilmesidir (4 katlı örnekte analiz başına ~14 s, 25 katlı 525M modelinde ~35 s).
 
 ---
 
@@ -59,6 +63,7 @@ Form (MainForm) / toplu mod (/batch) ─┤
 
 - **Dosyalar (kök klasör):** `OptimizationMethods.vb`, `OptimizationClass.vb`, `SocialSpider.vb` (yöntemler); `ETABSClass.vb` (değerlendirme, kısıtlar, sınırlar); `CompositeColumn.vb`, `TubeColumn.vb`, `HybridColumns.vb` (kompozit ve hibrit); `DialogGuard.vb` (gizli ETABS iletişim kutuları); `MainForm.vb` (form ve toplu mod); `ExcelExport.vb`.
 - **İki program:** optimizasyon programı (`FrameSap2000.exe`) ve ayrı `ModelBuilder.exe`. Aynı depo ve çözüm.
+- **Değerlendirici arayüzü (FEM sürümü):** `IStructureEvaluator` iki uygulamaya sahiptir: `EtabsEvaluator` (yukarıdaki akış, ETABS) ve `FemBackend` (`FemCore` kitaplığı: kesit atama → statik/modal/tepki spektrumu analizi → düğüm ötelemeleri → AISC 360-22 + AISC 341 tasarımı). Onarım adımları, kısıtlar, ceza ve 16 yöntem iki değerlendiricide aynıdır. Ayrıntı Bölüm 16.
 - **Kullanıcının oturumuna dokunmaz:** her zaman kendi (gizlenebilir) ETABS örneğini açar, model kopyası üzerinde çalışır; orijinal model değişmez. En iyi tasarım `<model>_best.EDB` olarak yazılır.
 - **Atıf:** referans proje `SteelFamewithCompositeColumn_ETABS` (2026.10.3) üzerine kuruludur; ek olarak SSO, dolgulu tüp, hibrit kolonlar, AISC 341 desteği, toplu koşu ve ModelBuilder eklenmiştir.
 
@@ -256,6 +261,8 @@ AISC 360-22, D/C sınırı 0,95, 500 analiz bütçesi, popülasyon 20, tohum 1; 
 | ModelBuilder RS ölçeği/ELF | S3 elle kontrol (W = 3306 kN) | Elle hesapla tutuyor |
 | ModelBuilder kombinasyonları | Katsayılar ve 35/35 seçim | Doğrulandı |
 | Regresyon | 525M gömülü mod, tohum 12345, 2 değerlendirme | 7556,76/1,4605 ve 7281,65/1,5927 — tüm yeni özelliklerde değişmedi |
+| FEM çözücü, ETABS ile | Statik, modal, tepki spektrumu, P-Δ, AISC 360-22 D/C oranları, AISC 341 (Bölüm 16.3) | Çevre çerçevelerde ort. ±%0,1, belirleyici üyelerde en büyük %1,4; SCWB rms %0,07–0,18 |
+| ETABS yolunun korunması | Aynı tasarım, FEM sürümündeki ETABS modu ile özgün program | Maliyet, ceza, tüm kısıt ve grup oranları birebir aynı |
 
 **Henüz bağımsız doğrulaması olmayanlar:** ModelBuilder'ın ASCE 7-22 rüzgâr kuvvetlerinin ETABS dışı bir kaynakla karşılaştırması (yalnızca elle kontrol); AISC 341 süneklik süzgecinin 289 kesit için ETABS'in "kompakt değil" kararıyla tam taraması (ayrıntılı kesit-kesit karşılaştırma yapılmadı; süzgeç k = 1,8·tf yaklaşımı kullanır, kalan farklar ceza ile yakalanır); P4 dışındaki ModelBuilder örneklerinin optimizasyonu.
 
@@ -264,7 +271,7 @@ AISC 360-22, D/C sınırı 0,95, 500 analiz bütçesi, popülasyon 20, tohum 1; 
 ## 12. Sınırlar ve yapılamayanlar
 
 **Hesap ve model**
-1. **ETABS bağımlılığı:** her tasarım ETABS'te analiz edilir; ETABS lisansı gerekir, analiz süresi koşu süresini belirler. Eşzamanlı koşu sayısı bu makinede 3.
+1. **ETABS bağımlılığı:** FEM modunda arama döngüsü ETABS'siz çalışır, ama model okuma, ilk sınır tasarımı (otomatik seçim listesi; 525M'de 9,5 dk) ve final doğrulama için ETABS lisansı gerekir. ETABS modunda her tasarım ETABS'te analiz edilir; süre koşu süresini belirler. **FEM'in işleyemediği modeller** (alan elemanı, Check Structure vb.) otomatik ETABS moduna döner.
 2. **Tek amaçlı** ve **ayrık W/tüp** kesitler; sürekli değişken yok. Katlar arası kesit değişimi gruplamayla belirlenir (kullanıcı kararı).
 3. **Döşeme ve kompozit kiriş yok:** döşeme modellenmez (kirişlere yük olarak verilir); kompozit döşeme programı ayrı bir proje olarak önerilecektir.
 4. **Rijit diyafram, düzenli ızgara** (ModelBuilder); düzensiz plan, çaprazlı sistem yok.
@@ -280,11 +287,17 @@ AISC 360-22, D/C sınırı 0,95, 500 analiz bütçesi, popülasyon 20, tohum 1; 
 12. Şu ana kadarki karşılaştırma verisi **tek tohumludur**. Yöntem sıralaması için en az 5–10 tohum gerekir (bütçe için Bölüm 13).
 13. Hibrit sonuçlar 500 analizde yeterince yakınsamamıştır; hibritin kompozitten kötü çıkması bir yöntem/bütçe sonucudur, bir mühendislik sonucu değildir.
 14. Devam eden (yedekten) koşular, RNG durumu yedeklenmediği için kesintisiz koşuyla aynı değildir; makale koşuları mümkünse kesintisiz yürütülmeli veya devam edilenler belirtilmelidir.
-15. Harici hızlı çözücü (ETABS'siz arama, ETABS'le doğrulama) **gelecek çalışmadır** ve bu projede yapılmayacaktır (`Ajan/Gorevler/GELECEK_DIS_COZUCU.md`); süreç bitince tartışılacak.
+15. ~~Harici hızlı çözücü gelecek çalışmadır~~ → **yapıldı** (FEM sürümü, Bölüm 16). Kalan sınırlar: 16–19.
+16. **FEM–ETABS farkı sıfır değildir:** D/C oranı çevre çerçevelerde ortalama ±%0,1; 25 katlı 525M modelinde yanal yüklü kirişlerde FEM %0–2,6 düşük (nedeni çözülemedi, `FemRatioMargin` = 1,01 ile karşılanıyor); uzay çerçevede düşük kullanımlı yerçekimi kirişlerinde FEM %6 düşük (belirleyici değil). Bu yüzden **son tasarım her zaman ETABS'te doğrulanır** ve gerekirse düzeltilir (aday arşivi + koruma adımları); makalede sonuçlar "ETABS doğrulamalı" olarak verilmelidir.
+17. **Bazı AISC 341 kararları ampiriktir:** SCWB için ETABS'e uydurulmuş sabitler (C0 = 1,5347, C1 = 2,2542; eksenel kuvvet yalnız sismik kombinasyonlardan), ETABS'in SCWB oranını boş bırakma kuralı (belirleyici kombinasyon sismik değilse) ve sismik kompaktlıkta Ca = sismik basınç × 1,1 ile moment kirişi bulunmayan kolon kuralı P4 ve ModelBuilder örneklerinden (36 + 18 + 12 + 3 tasarım, ~14.000 üye) çıkarılmıştır; farklı model türlerinde yeniden doğrulanmalıdır. Lb/ry'de FEM %8 fazla işaretler (muhafazakâr).
+18. **P-Δ:** ETABS'in P-Δ davranışı (kütle esaslı ön ayar ve doğrusal olmayan durumlar) taklit edilir; tutarlı geometrik rijitlik kararsızsa (eleman burkulması) topaklı P/L yedeği kullanılır. DAM (0,8) uygulanır; τb < 1 (ağır yüklü kolon) modellenmemiştir. Kompozit kesitlerde DAM uygulanmaz (ETABS davranışına uygun).
+19. **FEM kapsamı:** alan elemanı, yay, kablo, düzensiz diyafram, çok yönlü RS, zaman tanım alanı yoktur; model bunları içeriyorsa ETABS moduna dönülür. Hız ölçümleri 8 çekirdekli makinede yapılmıştır; işlemci doluyken 5–8 kat yavaşlama görüldü.
 
 ---
 
 ## 13. Süre ve kaynak tahminleri
+
+> **FEM çözücüyle (varsayılan) süreler çok daha kısadır** (alttaki tablolar ETABS moduna aittir). Ölçülen: P4 0,15 s/tasarım, 525M 0,35–0,45 s/tasarım; onarım adımları dahil SSO: P4'te 1536 analiz 3,5 dk, 525M'de 516 analiz 3 dk (+ ETABS başlangıcı 9,5 dk + final doğrulama ~1 dk); 16 yöntem × 400 analiz (P4) ≈ 20 dk. Yeni hesap yükü örneği: 16 yöntem × 10 tohum × 3000 analiz (P4) ≈ 17 saat, 525M ≈ 45 saat (tek makine; ETABS modunda sırasıyla ~76 gün ve ~170 gün). Her koşunun sonunda ETABS doğrulaması ek 1–3 dk ister.
 
 | Model | Analiz başına | 500 analiz | Not |
 |---|---|---|---|
@@ -304,6 +317,7 @@ AISC 360-22, D/C sınırı 0,95, 500 analiz bütçesi, popülasyon 20, tohum 1; 
 Aşağıdaki başlıklar programın bugünkü yeteneğiyle **hemen** yapılabilecekleri ve ek geliştirme gerektirenleri ayırır. Süre tahminleri Bölüm 13'e dayanır.
 
 ### A. Metasezgisel yöntem karşılaştırması (yapıya özgü)
+- **FEM sürümüyle durum:** hesap yükü artık ETABS koşularının ~%1'idir (Bölüm 13): 16 yöntem × 10 tohum × 3000 analiz P4'te ~17 saat. Bu başlık en büyük kazancı alan başlıktır; ModelBuilder'ın 5–20 katlı örneklerinde (10/15/20 kat çevre, 10 kat uzay) doğrulaması yapıldı (Bölüm 16.3). Aşağıdaki "Eksik/Risk" maddelerinden hesap süresi riski büyük ölçüde kalktı.
 - **Soru:** 16 yöntemden hangisi çelik çerçeve sizing probleminde daha az analizle daha iyi sonuç verir?
 - **Gereken:** 3–4 örnek (4, 10, 15 kat; çelik modu), 16 yöntem, 5–10 tohum, eşit analiz bütçesi, ortalama/en iyi/standart sapma, yakınsama eğrileri, istatistik test.
 - **Hazır:** yöntemler, toplu koşu, ModelBuilder, *History* sayfası. **Eksik:** 15 katlı örneğin çözülebilirliği doğrulanmadı; bütçe büyük (Bölüm 13).
@@ -337,19 +351,26 @@ Aşağıdaki başlıklar programın bugünkü yeteneğiyle **hemen** yapılabile
 - **Eksik:** daha büyük bütçeli ve çoklu tohumlu koşular; hibrit arama uzayına özel iyileştirme (yakınsama zayıf).
 - **Not:** hibrit sonucu şu an kompozitten kötüdür; bu bir bulgu olarak yazılabilir ama "hibrit daha iyidir" denemez.
 
-### G. Kapsama alınmayacaklar (makalede "gelecek çalışma" denmeli)
-Kompozit döşeme optimizasyonu (ayrı program önerisi), harici hızlı çözücü, çaprazlı/düzensiz sistemler, çok amaçlı optimizasyon, TBDY 2018 yük/kombinasyonları, tasarıma bağlı RS ölçekleme, rüzgârda burulma.
+### G. FEM çözücünün kendisi (yazılım/yöntem makalesi: ETABS'e kalibre edilmiş hızlı yapısal çözücüyle yapı optimizasyonu)
+- **Soru:** ETABS'siz bir çözücü, ETABS'in tasarım sonucunu hangi hata düzeyinde ve kaç kat hızla yeniden üretir; final ETABS doğrulaması bu farkı nasıl kapatır?
+- **Hazır:** 100 kat hız; ETABS ile üye bazında karşılaştırma verisi (calibdump: ~14.000 üye, 7 veri kümesi); kalibrasyon bulguları (ETABS'in AISC 341 davranışları: SCWB eksenel kuvveti, boş oran kuralı, kompaktlık, P-Δ ve DAM ayrıntıları); doğrulama yöntemi (rastgele tasarımlar + bağımsız doğrulama kümesi); aday arşivi + koruma adımı ile "doğrulamalı optimizasyon" akışı.
+- **Eksik:** daha çok model türü (düzensiz, çaprazlı), açık tablo/ölçüt, FEM'siz (ETABS) aynı bütçeyle optimum kalitesi karşılaştırması (ETABS'te yalnızca küçük bütçe mümkün).
+- **Not:** metodolojik katkı güçlü; ama "hızlı çözücü" literatürde yaygın olduğundan özgünlük, ETABS'in tasarım davranışlarının (AISC 341 SCWB vb.) ayrıntılı kalibrasyonu ve doğrulamalı akışta aranmalıdır (literatür taraması yapılmadı).
+
+### H. Kapsama alınmayacaklar (makalede "gelecek çalışma" denmeli)
+Kompozit döşeme optimizasyonu (ayrı program önerisi), çaprazlı/düzensiz sistemler, çok amaçlı optimizasyon, TBDY 2018 yük/kombinasyonları, tasarıma bağlı RS ölçekleme, rüzgârda burulma.
 
 ### Seçim için karar tablosu
 
 | Başlık | Hazırlık düzeyi | Yaklaşık hesap yükü | Özgünlük (kendi değerlendirmem) |
 |---|---|---|---|
-| A. Yöntem karşılaştırması | Yüksek | Çok yüksek (≥ 300 saat) | Orta (benzer çalışmalar çok) |
-| B. Çelik/kompozit/hibrit maliyet | Yüksek | Yüksek | Orta–yüksek |
+| A. Yöntem karşılaştırması | Yüksek | Çok yüksek (≥ 300 saat) → FEM ile ~17–45 saat | Orta (benzer çalışmalar çok) |
+| B. Çelik/kompozit/hibrit maliyet | Yüksek (FEM'de de çalışıyor) | Yüksek → FEM ile düşük | Orta–yüksek |
 | C. AISC 341 maliyet etkisi | Orta–yüksek (bir kapalı koşu eksik) | Düşük–orta | Orta–yüksek |
 | D. SSO uyarlaması | Orta | Orta | Düşük (şu veri SSO'yu en iyi göstermiyor) |
 | E. Örnek üretici / veri seti | Orta | Orta | Orta (yazılım odaklı) |
-| F. Hibrit geçiş | Orta | Yüksek | **Yüksek** |
+| F. Hibrit geçiş | Orta | Yüksek → FEM ile orta | **Yüksek** |
+| G. FEM çözücü + doğrulamalı optimizasyon | Yüksek | Düşük | Orta–yüksek |
 
 (Özgünlük sütunu kendi tahminimdir; literatür taraması yapılmadı.)
 
@@ -364,9 +385,49 @@ Kompozit döşeme optimizasyonu (ayrı program önerisi), harici hızlı çözü
 5. **Karşılaştırma ölçütü:** maliyet mi, çelik ağırlığı mı; kompozit ve çelik aynı ölçekte nasıl verilecek?
 6. **AISC 341 kapalı/açık karşılaştırmasının** aynı destekli modelde yapılması (kuyrukta).
 7. **ETABS sürümü ve tekrarlanabilirlik:** ETABS 22.6; sonuçların bu sürüme bağlı olduğu makalede yazılmalı.
-8. **Dış çözücü (gelecek çalışma)**: bu makalede yapılmayacak; yalnızca "gelecek çalışma" olarak anılacak.
-9. **Kod ve veri paylaşımı:** MIT lisanslı depo mevcut; ETABS modelleri ve sonuç dosyalarının paylaşım biçimi kararlaştırılmalı.
+8. **FEM çözücü bu makalenin konusu mu, aracı mı?** Yalnızca araç olarak kullanılıp sonuçlar "ETABS doğrulamalı" verilebilir (A, B, C, F), veya G başlığıyla yöntem katkısı olarak da yazılabilir.
+9. **FEM–ETABS farkının makalede nasıl raporlanacağı:** hedef doğruluk (ortalama ≤ %1, %95 ≤ %2, en büyük ≤ %5) ve ölçülen değerler Bölüm 16.3'te; belirleyici üyelerde sağlanıyor, bazı düşük kullanımlı üyelerde değil.
+10. **Kod ve veri paylaşımı:** MIT lisanslı depo mevcut; ETABS modelleri ve sonuç dosyalarının paylaşım biçimi kararlaştırılmalı.
 
 ---
 
-*Bu rapor, depodaki kayıtlardan (`DEGISIKLIKLER.md`, `KULLANIM_KILAVUZU.md`, `ModelBuilder/README.md`, `PROGRAM_KURALLARI.md`, `Ajan/Gorevler/*`) derlenmiştir. Raporda geçen tüm sayılar kayıtlı testlerden alınmıştır; kayıtta bulunmayan bir tahmin açıkça "tahmin" olarak işaretlenmiştir.*
+## 16. FEM çözücülü sürüm: yetenekler, hız ve doğruluk
+
+Bu bölüm 2026-10-09'dan 2026-10-13'e kadar yapılan FEM çalışmasının özetidir; ayrıntılı kayıtlar `FEM_SURUM_KAYITLARI.md` (Aşama F0–F8) dosyasındadır.
+
+### 16.1 Ne var
+- **Çözücü (`FemCore`):** 3B çerçeve elemanı (Timoshenko kayma deformasyonu), uç ofsetleri ve rijit bölgeler, uç salınımları (statik yoğunlaştırma), rijit kat diyaframları, kütle matrisi (topaklı) ile **modal analiz** (altuzay yinelemesi) ve **tepki spektrumu** (CQC, kazara dışmerkezlik), **P-Δ** (ETABS'in kütle esaslı ön ayarı ve doğrusal olmayan statik durumlar için yinelemeli), **DAM** (EA, EI × 0,8). Profil (skyline) Cholesky + ters Cuthill-McKee numaralandırma, paralel eleman döngüleri.
+- **Tasarım:** AISC 360-22 (E3/E7 basınç, F2/F3/F6 eğilme, G2/G6 kesme, H1 etkileşim; istasyon kuvvetleri, Cb kuralları), **AISC 341**: güçlü kolon–zayıf kiriş (ETABS'e uydurulmuş), sismik kompaktlık (Tablo D1.1), Lb/ry (D1.2b).
+- **Kolon türleri:** çelik, dolgulu tüp, gömülü kompozit ve hibrit; kompozit için mevcut iç kontrol FEM istasyon kuvvetleriyle çalışır; final ETABS kompozit tasarımı değişmedi.
+- **Akış:** ETABS modeli bir kez okunur (`EtabsReader`) → kesitler katalogdan atanır → FEM analiz+tasarım → onarım/ceza (ETABS modundakiyle aynı kod) → **final: en iyi tasarım ETABS'te yeniden analiz edilir**, `_best.EDB` kaydedilir; ETABS cezası > 0 ise aday arşivi (en ucuz 20 FEM-uygun tasarım, en çok 10 ETABS denemesi) ve koruma adımları (geometrik kısıtı sağlayan, rijitliği küçülmeyen ilk kesit).
+- **Ayarlar:** form kutusu *FEM solver (fast)* (varsayılan açık), `App.config` `Evaluator`, `FemRatioMargin` (1,01), `FemArchiveSize` (20); toplu modda `Evaluator` sütunu.
+
+### 16.2 Hız (8 çekirdek, makine boşken)
+| Model | ETABS | FEM |
+|---|---|---|
+| P4 (4 kat, 84 eleman) | 13,7 s/tasarım | 0,15 s |
+| 525M (25 kat, 525 eleman, 3 P-Δ'lı doğrusal olmayan kombinasyon) | 40–50 s | 0,35–0,45 s |
+| Tam SSO koşusu P4 (1536 analiz) | ≈ 5,5 saat | 3,5 dk |
+| 16 yöntem × 400 analiz, P4 | ≈ 24 saat | ≈ 20 dk (ETABS doğrulaması dahil) |
+
+### 16.3 Doğruluk (FEM − ETABS)
+- **Analiz çıktıları (F1–F3):** yer değiştirme, dönme, reaksiyon, üye kuvvetleri %0,000 (statik); modal periyot %0,00–0,05; tepki spektrumu %0,1–0,3; P-Δ %0,1–0,4.
+- **Kat ötelemesi:** belirleyici kat ötelemesi/sınır oranı ETABS'ten %0–0,7 sapar (8 tasarım).
+- **D/C oranı ve AISC 341 (rastgele tasarımlar, ETABS DAM durumunda):**
+
+| Küme | Üye | D/C ort. | %95 | Not |
+|---|---|---|---|---|
+| P4, 18 bağımsız doğrulama tasarımı | 1512 | +%0,12 | +%0,6 | SCWB rms %0,18; sismik hata işareti %97,9 uyumlu |
+| 10 / 15 / 20 katlı çevre çerçeve (ModelBuilder, spektrumlu, P-Δ) | 1200 / 1800 / 3900 | +%0,08 / −%0,03 / +%0,01 | +%0,8 / +%0,2 / +%0,3 | ETABS oranı > 0,3 olan üyelerde en büyük fark %1,2–1,4; SCWB rms %0,07–0,12 |
+| 10 katlı uzay çerçeve | 1200 | −%0,42 | +%3,6 (%5: −%8,5) | belirleyici üyelerde (oran > 0,7) en büyük %0,7; düşük kullanımlı yerçekimi kirişlerinde −%6 |
+| 525M (25 kat, doğrusal olmayan P-Δ) | 1575 | −%1,0 | +%1,2 (%5: −%3,8) | kolonlar ≈ %0; yanal yüklü kirişler −%1,6…−%2,6 |
+
+- **Sonuç düzeyinde (optimizasyon çıktısı):** P4'te 16 yöntemin en iyi tasarımlarından FEM'in uygun saydığı 6'sının 5'i ETABS'te de uygun, biri %1 üzerinde; ceza değerleri uygun yakınında ≤ %1 farklı. 525M'de SSO'nun en iyi tasarımı ETABS'te de uygun (ceza 0, D/C 0,715, kat ötelemesi 0,974). Hibrit ve gömülü/tüp kompozit koşularda ETABS kompozit doğrulaması geçti.
+- **ETABS'in kendi davranışları (kalibrasyonla bulundu, makale için ilginç):** (i) SCWB'de Mpc eksenel kuvveti yalnız tepki spektrumlu kombinasyonlardan; (ii) SCWB oranı, kolonun belirleyici kombinasyonu sismik değilse hiç verilmez (439/439 ve 82/82); (iii) sismik hata alan elemanda ETABS oranı 0 verir; (iv) moment bağlantılı kirişi olmayan ve üstünde kolon bulunan kolon sismik kompaktlık denetimine girmez; (v) kompozit General kesitlere DAM uygulanmaz; (vi) doğrusal olmayan P-Δ'da eleman burkulması yoktur.
+
+### 16.4 Bilinen sınırlar (özet; tam liste Bölüm 12, madde 16–19)
+FEM–ETABS fark sıfır değildir ve final ETABS doğrulaması zorunludur; AISC 341 sabitleri ampiriktir; alan elemanı vb. FEM dışıdır; hız ölçümleri 8 çekirdekte ve boş makinede yapılmıştır.
+
+---
+
+*Bu rapor, depodaki kayıtlardan (`FEM_SURUM_KAYITLARI.md`, `DEGISIKLIKLER.md`, `KULLANIM_KILAVUZU.md`, `ModelBuilder/README.md`, `PROGRAM_KURALLARI.md`, `Ajan/Gorevler/*`) derlenmiştir. Raporda geçen tüm sayılar kayıtlı testlerden alınmıştır; kayıtta bulunmayan bir tahmin açıkça "tahmin" olarak işaretlenmiştir.*
