@@ -166,7 +166,7 @@ Partial Public Class FemStatic
         Dim E = M.Elements(ei)
         Dim S = E.Section
         Dim Res As New MemberRatios
-        If S.NoDesign Then Return Res
+        If S.NoDesign Then Return If(M.CompositeScwb AndAlso S.Mpcc IsNot Nothing, AxialEnvelope(R, ei, Combos, RS), Res)
         Dim Lc As Double = ClearLength(E)
         Dim xs() As Double = StationLocations(ei)
         Dim LMaj As Double = If(E.UnbracedMajor > 0, E.UnbracedMajor, Lc), LMin As Double = If(E.UnbracedMinor > 0, E.UnbracedMinor, Lc), LLtb As Double = If(E.UnbracedLTB > 0, E.UnbracedLTB, Lc)
@@ -257,6 +257,40 @@ Partial Public Class FemStatic
                     If v2 > Res.VMaj Then Res.VMaj = v2 : Res.VMajCombo = cmb.Name
                     Res.VMin = Math.Max(Res.VMin, Math.Abs(sf1(2)) / (Ph3 * Vn3))
                 Next
+            Next
+        Next
+        Return Res
+    End Function
+
+    'Composite columns (no steel design; PCR-5b): largest compression of all design combinations (PuMax) and of the combinations with response
+    'spectrum terms (PuSeis), with the same combination rules as the steel design above; PMMCombo = the combination of PuSeis
+    Private Function AxialEnvelope(ByVal R As StaticResults, ByVal ei As Integer, ByVal Combos As List(Of FemCombo), ByVal RS As Dictionary(Of String, RSResults)) As MemberRatios
+        Dim Res As New MemberRatios
+        Dim xs() As Double = StationLocations(ei)
+        For Each cmb In Combos
+            If cmb.Nonlinear Then Continue For
+            If cmb.RSTerms.Count > 0 AndAlso RS Is Nothing Then Continue For
+            Dim N(xs.Length - 1) As Double
+            For Each t In cmb.Terms
+                Dim p As Integer = M.PatternIndex(t.Name)
+                If p < 0 Then Continue For
+                Dim sp = StationForces(R, p, ei, xs)
+                For j = 0 To xs.Length - 1 : N(j) += t.Factor * sp(j)(0) : Next
+            Next
+            If cmb.RSTerms.Count > 0 Then
+                Dim Mag(xs.Length - 1) As Double
+                For Each rt In cmb.RSTerms
+                    Dim rr As RSResults = Nothing
+                    If Not RS.TryGetValue(rt.Name, rr) Then Continue For
+                    Dim sp = RSStationForces(rr, ei, xs)
+                    For j = 0 To xs.Length - 1 : Mag(j) += Math.Abs(rt.Factor) * sp(j)(0) : Next
+                Next
+                For j = 0 To xs.Length - 1 : N(j) += If(N(j) >= 0, 1.0, -1.0) * Mag(j) : Next
+            End If
+            For j = 0 To xs.Length - 1
+                Dim Pu As Double = -N(j)
+                If Pu > Res.PuMax Then Res.PuMax = Pu
+                If cmb.RSTerms.Count > 0 AndAlso Pu > Res.PuSeis Then Res.PuSeis = Pu : Res.PMMCombo = cmb.Name
             Next
         Next
         Return Res

@@ -1,4 +1,4 @@
-Imports System.Collections.Generic
+﻿Imports System.Collections.Generic
 
 'AISC 341 checks that depend on the model: strong column - weak beam ratios (empirical fit to ETABS, see FEM_SURUM_KAYITLARI.md), and the
 'section based checks (compactness and the Lb/ry limit of the beams)
@@ -32,9 +32,13 @@ Partial Public Class FemStatic
                 Attached(nd).Add(i)
             Next
         Next
+        'PCR-5b: composite columns (AISC 341-22 G3.4a) when the model asks for them; otherwise only steel columns (earlier versions)
+        Dim Comp = Function(e As FemElement) M.CompositeScwb AndAlso e.Section.NoDesign AndAlso e.Section.Mpcc IsNot Nothing
+        Dim Usable = Function(e As FemElement) Not e.Section.NoDesign OrElse Comp(e)
+        Dim Joints As New List(Of ScwbJoint)
         For ci = 0 To ne - 1
             Dim col = M.Elements(ci)
-            If Not IsCol(col) OrElse col.Section.NoDesign Then Continue For
+            If Not IsCol(col) OrElse Not Usable(col) Then Continue For
             Dim top As Integer = If(M.Nodes(col.NI).Z > M.Nodes(col.NJ).Z, col.NI, col.NJ)
             Dim above As Integer = -1
             For Each ei In Attached(top)
@@ -42,8 +46,13 @@ Partial Public Class FemStatic
                 If ei <> ci AndAlso IsCol(e) AndAlso M.Nodes(If(e.NI = top, e.NJ, e.NI)).Z > M.Nodes(top).Z Then above = ei
             Next
             Me.Above(ci) = above
-            If above < 0 OrElse M.Elements(above).Section.NoDesign Then Continue For
-            Dim ab = M.Elements(above)
+            Dim HasAbove As Boolean = above >= 0 AndAlso Usable(M.Elements(above))
+            If Not HasAbove AndAlso Not M.CornerScwb Then Continue For          'roof joints: only the corner check below (PCR-5g)
+            Dim ab As FemElement = If(HasAbove, M.Elements(above), Nothing)
+            Dim AnyComp As Boolean = Comp(col) OrElse (HasAbove AndAlso Comp(ab))
+            Dim Cols() As Integer = If(HasAbove, {ci, above}, {ci})
+            'moment connected beams at the top joint, per plane
+            Dim BeamSum(1) As Double, BeamCount(1) As Integer, BeamDir(1) As Integer
             For plane = 0 To 1                                   '0 = major (axis 2 of the column in the plane), 1 = minor
                 Dim sumB As Double = 0, nB As Integer = 0
                 For Each bi In Attached(top)
@@ -56,21 +65,151 @@ Partial Public Class FemStatic
                     Dim along2 As Double = Math.Abs(dirx * col.Axes(1, 0) + diry * col.Axes(1, 1))
                     Dim inPlane As Boolean = If(plane = 0, along2 > 0.7, along2 <= 0.7)
                     If Not inPlane Then Continue For
+                    BeamDir(plane) = If(Math.Abs(dirx) >= Math.Abs(diry), 0, 1)      'global direction of the frame line (0 = x, 1 = y)
                     Dim off As Double = If(atI, b.OffsetI, b.OffsetJ)
-                    sumB += ScwbC0 * b.Section.Fy * b.Section.Z33 * (1 + ScwbC1 * off / b.Length)
+                    If AnyComp OrElse M.ScwbBeamCode Then
+                        'AISC 341-22, plastic hinge at the column face, moment projected to the column centreline over the end offset with the
+                        'hinge shear 2 Mp / Lh (gravity shear neglected): composite joints G3.4a 1.1 Mpbe + Muv, Mpbe = Ry Fy Z; steel joints
+                        'Eq. E3-3 Mpr + alpha_s Mv, Mpr = Cpr Ry Fy Z, Cpr = (Fy + Fu) / 2 Fy <= 1.2
+                        Dim Fy As Double = b.Section.Fy
+                        Dim Cpr As Double = If(Fy > 0 AndAlso b.Section.Fu > 0, Math.Min((Fy + b.Section.Fu) / (2 * Fy), 1.2), 1.2)
+                        Dim Mp As Double = If(AnyComp, 1.1, Cpr) * SteelDesign.RyAisc * Fy * b.Section.Z33
+                        Dim Lh As Double = Math.Max(b.Length - b.OffsetI - b.OffsetJ, 0.001)
+                        sumB += Mp + 2 * Mp / Lh * off
+                    Else
+                        sumB += ScwbC0 * b.Section.Fy * b.Section.Z33 * (1 + ScwbC1 * off / b.Length)
+                    End If
                     nB += 1
                 Next
-                If nB = 0 Then Continue For
-                Dim sumC As Double = 0
-                For Each cc In {ci, above}
+                BeamSum(plane) = sumB : BeamCount(plane) = nB
+            Next
+            'column side of the joint per plane (E3-2 / G3.4a Mpcc), Pr of the design combinations
+            Dim SumC(1) As Double
+            For plane = 0 To 1
+                If BeamCount(plane) = 0 Then Continue For
+                For Each cc In Cols
                     Dim c = M.Elements(cc)
-                    Dim z As Double = If(plane = 0, c.Section.Z33, c.Section.Z22)
-                    sumC += z * (c.Section.Fy - PuAisc341(Fem(cc)) / c.Section.A)
+                    If Comp(c) Then
+                        SumC(plane) += c.Section.Mpcc(PuAisc341(Fem(cc)), plane)     'G3.4a: Mpcc at Prc (AISC 360-22 Chapter I plastic stress distribution)
+                    Else
+                        Dim z As Double = If(plane = 0, c.Section.Z33, c.Section.Z22)
+                        SumC(plane) += z * (c.Section.Fy - PuAisc341(Fem(cc)) / c.Section.A)
+                    End If
                 Next
-                If sumC <= 0 Then Continue For
-                If plane = 0 Then Major(ci) = sumB / sumC Else Minor(ci) = sumB / sumC
+            Next
+            'PCR-5g (AISC 341-22 E3.3, Commentary case (b): multi-bay planar frames intersecting at the corner columns only): a corner joint
+            '(moment beams in both planes) has no joint moment ratio; the frame lines are checked per storey with the corner columns ignored
+            'and the corner columns for strength with the beams of both directions yielding (StoreyAndCornerChecks)
+            Dim Corner As Boolean = M.CornerScwb AndAlso CornerPr IsNot Nothing AndAlso BeamCount(0) > 0 AndAlso BeamCount(1) > 0
+            If M.CornerScwb AndAlso CornerPr IsNot Nothing Then
+                Joints.Add(New ScwbJoint With {.Col = ci, .Above = If(HasAbove, above, -1), .Node = top, .Corner = Corner,
+                                               .BeamSum = BeamSum, .BeamCount = BeamCount, .Dir = BeamDir, .SumC = SumC})
+                If Corner Then Continue For
+            End If
+            If Not HasAbove Then Continue For                                     'roof joints: no joint ratio (storey check above)
+            'G3.4a exception: a joint of composite columns only, each with Prc < 0.1 Pyc, is not checked
+            If Comp(col) AndAlso Comp(ab) AndAlso PuAisc341(Fem(ci)) < 0.1 * col.Section.Pyc AndAlso PuAisc341(Fem(above)) < 0.1 * ab.Section.Pyc Then Continue For
+            For plane = 0 To 1
+                If BeamCount(plane) = 0 OrElse SumC(plane) <= 0 Then Continue For
+                If plane = 0 Then Major(ci) = BeamSum(plane) / SumC(plane) Else Minor(ci) = BeamSum(plane) / SumC(plane)
             Next
         Next
+        If M.CornerScwb AndAlso CornerPr IsNot Nothing Then StoreyAndCornerChecks(Joints, Fem, Major, Minor, Comp)
+    End Sub
+
+    Private Class ScwbJoint
+        Public Col, Above, Node As Integer
+        Public Corner As Boolean
+        Public BeamSum(), SumC() As Double
+        Public BeamCount(), Dir() As Integer
+    End Class
+
+    'PCR-5g, AISC 341-22 Commentary E3.3 case (b), conservative alternate. (1) Storey check of every frame line at every floor:
+    'sum of the projected beam strengths of all moment connected beams of the line (corner joints included) <= sum of the column strengths
+    'of the non-corner joints of the line (corner columns ignored); the ratio goes to the non-corner columns of the line. Roof: exempt when
+    'every non-corner column meets the axial limit of the E3.4a / G3.4a exception. (2) Corner columns: AISC 360-22 H1-1 (steel) or the
+    'composite interaction (CFT, host routine) with Pr of D1.4a(b) (CornerPr) and the projected beam strengths of both directions, split
+    'between the column above and below the joint by the flexural stiffness I / L
+    Private Sub StoreyAndCornerChecks(ByVal J As List(Of ScwbJoint), ByVal Fem() As MemberRatios, ByVal Major() As Double, ByVal Minor() As Double,
+                                      ByVal Comp As Func(Of FemElement, Boolean))
+        Dim Lines As New Dictionary(Of String, List(Of Tuple(Of ScwbJoint, Integer)))
+        For Each jt In J
+            Dim nd = M.Nodes(jt.Node)
+            For plane = 0 To 1
+                If jt.BeamCount(plane) = 0 Then Continue For
+                Dim Coord As Double = If(jt.Dir(plane) = 0, nd.Y, nd.X)
+                Dim Key As String = jt.Dir(plane) & "|" & Math.Round(Coord, 3).ToString(Globalization.CultureInfo.InvariantCulture) & "|" &
+                                    Math.Round(nd.Z, 3).ToString(Globalization.CultureInfo.InvariantCulture)
+                If Not Lines.ContainsKey(Key) Then Lines(Key) = New List(Of Tuple(Of ScwbJoint, Integer))
+                Lines(Key).Add(Tuple.Create(jt, plane))
+            Next
+        Next
+        Dim Exempt = Function(ci As Integer) As Boolean
+                         Dim c = M.Elements(ci)
+                         Return If(Comp(c), PuAisc341(Fem(ci)) < 0.1 * c.Section.Pyc, PuAisc341(Fem(ci)) < 0.3 * c.Section.Fy * c.Section.A)
+                     End Function
+        For Each kv In Lines
+            Dim NonCorner = kv.Value.Where(Function(t) Not t.Item1.Corner).ToList()
+            If NonCorner.Count = 0 OrElse NonCorner.Count = kv.Value.Count Then Continue For        'no corner on the line: joint checks only
+            If NonCorner.All(Function(t) t.Item1.Above < 0) AndAlso NonCorner.All(Function(t) Exempt(t.Item1.Col)) Then Continue For
+            Dim sB As Double = kv.Value.Sum(Function(t) t.Item1.BeamSum(t.Item2))
+            Dim sC As Double = NonCorner.Sum(Function(t) t.Item1.SumC(t.Item2))
+            Dim Rho As Double = If(sC > 0, sB / sC, 10.0)
+            For Each t In NonCorner
+                If t.Item2 = 0 Then Major(t.Item1.Col) = Math.Max(Major(t.Item1.Col), Rho) Else Minor(t.Item1.Col) = Math.Max(Minor(t.Item1.Col), Rho)
+            Next
+        Next
+        For Each jt In J.Where(Function(x) x.Corner)
+            Dim Segs() As Integer = If(jt.Above >= 0, {jt.Col, jt.Above}, {jt.Col})
+            Dim Len = Function(e As Integer) Math.Max(M.Elements(e).Length, 0.001)
+            Dim Kx As Double = Segs.Sum(Function(e) M.Elements(e).Section.I33 / Len(e)), Ky As Double = Segs.Sum(Function(e) M.Elements(e).Section.I22 / Len(e))
+            For Each s In Segs
+                Dim E = M.Elements(s)
+                Dim Mx As Double = jt.BeamSum(0) * If(Kx > 0, E.Section.I33 / Len(s) / Kx, 1.0 / Segs.Length)
+                Dim My As Double = jt.BeamSum(1) * If(Ky > 0, E.Section.I22 / Len(s) / Ky, 1.0 / Segs.Length)
+                Dim Pr As Double = CornerPr(s)
+                Dim R As Double
+                If Comp(E) Then
+                    R = If(E.Section.CompositeCheck IsNot Nothing, E.Section.CompositeCheck(Pr, Mx, My, Len(s)), 0.0)
+                Else
+                    Dim Pc As Double = 0.9 * SteelDesign.CompressionStrength(E.Section, Len(s), Len(s))
+                    Dim Mcx As Double = 0.9 * SteelDesign.MajorFlexure(E.Section, Len(s), 1.0), Mcy As Double = 0.9 * SteelDesign.MinorFlexure(E.Section)
+                    Dim rp As Double = Pr / Math.Max(Pc, 0.000001)
+                    R = If(rp >= 0.2, rp + 8.0 / 9.0 * (Mx / Mcx + My / Mcy), rp / 2 + Mx / Mcx + My / Mcy)
+                End If
+                Major(s) = Math.Max(Major(s), R) : Minor(s) = Math.Max(Minor(s), R)
+            Next
+        Next
+    End Sub
+
+    'PCR-5g: required axial compression of every column for the corner check, AISC 341-22 D1.4a with the overstrength seismic load of both
+    'directions: P(CornerGravity) + Omega0 (|P_RSx| + |P_RSy|), largest over the stations (compression positive). Set before StrongColumnWeakBeam.
+    Public CornerPr() As Double
+
+    Public Sub SetCornerAxial(ByVal R As StaticResults, ByVal RS As Dictionary(Of String, RSResults))
+        Dim ne As Integer = M.Elements.Count
+        Dim Out(ne - 1) As Double
+        System.Threading.Tasks.Parallel.For(0, ne, FemProfile.Options, Sub(ei)
+                                                                          If Math.Abs(M.Elements(ei).Axes(0, 2)) <= 0.9 Then Return
+                                                                          Dim xs() As Double = StationLocations(ei)
+                                                                          Dim N(xs.Length - 1) As Double, Q(xs.Length - 1) As Double
+                                                                          For Each t In M.CornerGravity.Terms
+                                                                              Dim pat As Integer = M.PatternIndex(t.Name)
+                                                                              If pat < 0 Then Continue For
+                                                                              Dim sp = StationForces(R, pat, ei, xs)
+                                                                              For j = 0 To xs.Length - 1 : N(j) += t.Factor * sp(j)(0) : Next
+                                                                          Next
+                                                                          For Each rc In M.RSCases.Where(Function(c) c.Direction = 0 OrElse c.Direction = 1)
+                                                                              Dim rr As RSResults = Nothing
+                                                                              If RS Is Nothing OrElse Not RS.TryGetValue(rc.Name, rr) Then Continue For
+                                                                              Dim sp = RSStationForces(rr, ei, xs)
+                                                                              For j = 0 To xs.Length - 1 : Q(j) += Math.Abs(sp(j)(0)) : Next
+                                                                          Next
+                                                                          Dim Pmax As Double = 0
+                                                                          For j = 0 To xs.Length - 1 : Pmax = Math.Max(Pmax, -N(j) + M.Omega0 * Q(j)) : Next
+                                                                          Out(ei) = Pmax
+                                                                      End Sub)
+        CornerPr = Out
     End Sub
 
 End Class

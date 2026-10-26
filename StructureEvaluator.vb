@@ -35,4 +35,7 @@ Public Interface IStructureEvaluator
     Function ReadSteelDesign(ByVal Result As Dictionary(Of String, GroupDesign)) As Integer
     'Frame forces of the strength combinations for the composite column check (one block per frame and combination step)
     Function ReadFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer
+    'AISC 341-22 G3.4a beam/column moment ratio of a composite column group (largest of its members; 0 = not computed). FEM: from the own
+    'solver (PCR-5b); ETABS: 0 (ETABS does not check composite columns; the final check computes it from the ETABS forces, PCR-5h)
+    Function CompositeScwbRatio(ByVal Group As String) As Double
 End Interface

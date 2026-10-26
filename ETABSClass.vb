@@ -161,6 +161,8 @@ Partial Public Class ETABS_Class
         Backend = EtabsBackend
         ret = InitializeETABS()
         If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeETABS") : Return ret : End If
+        LogAisc341Options()
+        ReadDesignPreferences()
         If FormInfo.CompositeColumns Then
             ret = InitializeCompositeSettings()
             If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeCompositeSettings") : Return ret : End If
@@ -215,16 +217,18 @@ Partial Public Class ETABS_Class
         If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeRatioLimits") : Return ret : End If
         '_____________________________________________________
         'Upper Lower boundary Def
-        If FormInfo.CheckStructure = False Then
+        Dim FromCache As Boolean = Not FormInfo.CheckStructure AndAlso LoadInitialDesign()      'PCR-1
+        If FormInfo.CheckStructure = False AndAlso Not FromCache Then
             Report("Initial design with the auto select lists (search bounds); ETABS iterates analysis and design, this can take several minutes")
             ret = Initialize_UBLB()
             If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: Initialize_UBLB") : Return ret : End If
         End If
         CompositeActive = FormInfo.CompositeColumns
-        If FormInfo.CheckStructure = False AndAlso ReadSetting("WidenBoundsForDrift") <> "false" Then
+        If FormInfo.CheckStructure = False AndAlso Not FromCache AndAlso ReadSetting("WidenBoundsForDrift") <> "false" Then
             ret = WidenBoundsForDrift()
             If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: WidenBoundsForDrift") : Return ret : End If
         End If
+        If FormInfo.CheckStructure = False AndAlso Not FromCache Then SaveInitialDesign()
         ret = SelectEvaluator()
         If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: SelectEvaluator") : Return ret : End If
         '_____________________________________________________
@@ -252,6 +256,14 @@ Partial Public Class ETABS_Class
     'Internal composite strength ratios are multiplied by this factor (App.config CompositeStrengthFactor, default 1.0).
     'The final ETABS check logs the factor that would make the internal check match ETABS.
     Private ReadOnly CompositeStrengthFactor As Double = ReadNumber("CompositeStrengthFactor", 1.0)
+
+    'Unit cost of the tube steel relative to the steel unit cost (rolled W): built-up boxes and library HSS. 1.0 = the same price (old results)
+    Private ReadOnly TubeCostBuiltUp As Double = ReadNumber("TubeSteelCostFactorBuiltUp", 1.0)
+    Private ReadOnly TubeCostHSS As Double = ReadNumber("TubeSteelCostFactorHSS", 1.0)
+
+    Private Function TubeCostFactor(ByVal T As TubeSection_) As Double
+        Return If(T.BuiltUp, TubeCostBuiltUp, TubeCostHSS)
+    End Function
 
     'D/C ratio limits of the ETABS designs (preference "DCLimit", ETABS default 0.95): ETABS compares the D/C ratios with
     'them, not with 1. The design ratios of the program are divided by the limits (1 = at the limit), so a design
@@ -817,7 +829,7 @@ Partial Public Class ETABS_Class
                     'column groups (all members vertical) become composite columns (hybrid: InitializeHybrid sets the types)
                     Groups(i).IsColumn = FNames.Take(FNumber).All(Function(n) FrameIndex.ContainsKey(n) AndAlso
                                                 Frames(FrameIndex(n)).FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.Z)
-                    Groups(i).IsComposite = FormInfo.CompositeColumns AndAlso Groups(i).IsColumn
+                    Groups(i).IsComposite = FormInfo.CompositeColumns AndAlso Groups(i).IsColumn AndAlso Not SteelInteriorGroup(Groups(i).GroupName)
                 End If
             End If
         Next i
@@ -975,8 +987,10 @@ Partial Public Class ETABS_Class
 
     Private Sub SetSeismicDriftFactors()
         DriftFactor.Clear()
-        If FormInfo.DriftComboMode <> MiscellaneousStructures.DriftComboMode_.LateralCasesOnly Then Return
+        If FormInfo.DriftComboMode <> MiscellaneousStructures.DriftComboMode_.LateralCasesOnly Then LogDriftSplit() : Return
         Dim Seismic As List(Of String) = DriftCaseNames.Where(Function(c) IsSeismicCase(c)).ToList()
+        SeismicDriftCases.Clear() : SeismicDriftCases.UnionWith(Seismic)
+        LogDriftSplit()
         If Seismic.Count = 0 Then Return
         Dim Amp As Double = ReadNumber("SeismicDriftAmplification", 1.0)
         For Each c In Seismic
@@ -1419,8 +1433,9 @@ Partial Public Class ETABS_Class
         'AISC 341 strong column - weak beam active (the columns have beam/column capacity ratios): a lighter beam lowers the ratio, so the
         'strength design (lower bound) is no longer a lower bound of the beam groups: they are opened down to the lightest section
         Dim BC0 As Dictionary(Of String, Double) = ReadBeamColumnRatios()
-        SCWBActive = BC0 IsNot Nothing AndAlso BC0.Values.Any(Function(v) v > 0)
+        SCWBActive = ScwbActiveFor(BC0)
         If SCWBActive Then Errorlogprint("Info: AISC 341 strong column - weak beam is active: the lower bound of the beam groups is opened (lightest section)")
+        If SeismicScwbMode <> "legacy" Then Errorlogprint("Info: AISC 341 member ductility and beam bracing checks " & If(SeismicChecksActive, "active", "off") & " (SeismicSCWB " & SeismicScwbMode & ")")
         InitializeDuctilityFilter()
 
         Dim N As Integer = WSections.Count
@@ -1482,6 +1497,7 @@ Partial Public Class ETABS_Class
         For Attempt = 1 To 5
             Dim M As New OptimizationStructure_.Member_ With {.DesignVariables = CType(Ub.Clone(), Integer())}
             Dim Dummy As Integer = 0, ret As Integer = 0
+            WidenLastEvaluated = CType(Ub.Clone(), Integer())        'PCR-1: the model state (sections, end offsets) the FEM evaluator is read from
             Evaluate(M, Dummy, ret, False)
             If ret <> 0 Then Return ret
             If AnalysisFailed Then Return 0
@@ -1672,6 +1688,9 @@ Partial Public Class ETABS_Class
     Private Const E_STEEL As Double = 199948.0, FY_STEEL As Double = 344.738, RY_STEEL As Double = 1.1
 
     Private Shared Function MeetsDuctility(ByVal S As SectionStructures_.STEEL_I_SECTION, ByVal High As Boolean, ByVal Ca As Double) As Boolean
+        'AISC 341-22 (PCR-5e): same limits as the FEM check (h = d - 2 kdes); Ca = Pr / (Ry Fy Ag)
+        If FemCore.SteelDesign.Aisc341_2022 Then Return FemCore.SteelDesign.Compact2022(S.FlangeLength / (2 * S.FlangeThickness), (S.Depth - 2 * Math.Max(S.KDES, S.FlangeThickness)) / S.WebThickness,
+                                                                      E_STEEL, FY_STEEL, High, Ca)
         Dim Root As Double = Math.Sqrt(E_STEEL / (RY_STEEL * FY_STEEL))
         If S.FlangeLength / (2 * S.FlangeThickness) > If(High, 0.32, 0.4) * Root Then Return False
         Dim H As Double = S.Depth - 2 * 1.8 * S.FlangeThickness
@@ -1698,7 +1717,7 @@ Partial Public Class ETABS_Class
     Private Sub InitializeDuctilityFilter()
         DuctilityLevel = "None" : DuctileBeam = Nothing : DuctileColumn = Nothing
         Dim Mode As String = If(ReadSetting("SeismicDuctilityFilter"), "auto").Trim().ToLowerInvariant()
-        If Mode = "off" OrElse (Mode <> "on" AndAlso Not SCWBActive) Then Return
+        If Mode = "off" OrElse (Mode <> "on" AndAlso Not SeismicChecksActive) Then Return
         Dim FrameType As String = ""
         Try
             Dim Version, N As Integer, Fields() As String = Nothing, Data() As String = Nothing
@@ -1718,6 +1737,9 @@ Partial Public Class ETABS_Class
             Return
         End If
         Dim Ca As Double = Math.Max(0.0, ReadNumber("SeismicColumnCa", 0.3))
+        'AISC 341-22: the web limit falls steeply with Ca (Ca 0.3: 44 % of the limit at Ca 0), so a fixed Ca would remove columns that comply at
+        'their real axial force; the filter uses Ca = 0 for the columns and the FEM check with the real Pr of every column (penalty) does the rest
+        If FemCore.SteelDesign.Aisc341_2022 Then Ca = 0
         Dim High As Boolean = (DuctilityLevel = "High")
         ReDim DuctileBeam(WSections.Count - 1) : ReDim DuctileColumn(WSections.Count - 1)
         For i = 0 To WSections.Count - 1
@@ -2063,7 +2085,7 @@ Partial Public Class ETABS_Class
         If (ret <> 0) Then Return ret
         For i = 0 To Points.Length - 1
             Points(i).PointDisp = New FramePointStoryGroupStructures_.LoadCaseDisp_ With {
-                .U1 = New List(Of Double), .U2 = New List(Of Double)}
+                .U1 = New List(Of Double), .U2 = New List(Of Double), .W1 = New List(Of Double), .W2 = New List(Of Double)}
         Next i
         For Each Row In Rows
             Dim i As Integer
@@ -2071,7 +2093,11 @@ Partial Public Class ETABS_Class
             Dim f As Double = 1.0
             If DriftFactor.Count > 0 AndAlso Not DriftFactor.TryGetValue(Row.CaseName, f) Then f = 1.0
             With Points(i).PointDisp
-                .U1.Add(f * Row.U1) : .U2.Add(f * Row.U2)
+                If DriftSplit AndAlso Not SeismicDriftCases.Contains(Row.CaseName) Then
+                    .W1.Add(WindDriftFactor * Row.U1) : .W2.Add(WindDriftFactor * Row.U2)       'PCR-8: wind cases -> top drift only
+                Else
+                    .U1.Add(f * Row.U1) : .U2.Add(f * Row.U2)
+                End If
             End With
         Next
         Return ret
@@ -2155,10 +2181,17 @@ Partial Public Class ETABS_Class
         Dim ret As Integer = 0
         Try
             ETABS_print.TopStoryDrifts = New List(Of Double)
-            Dim TopPoints = Points.Where(Function(c) Math.Abs(c.Zcoord - StructureHeight) < COORD_TOL AndAlso c.PointDisp.U1 IsNot Nothing AndAlso c.PointDisp.U1.Count > 0).ToList()
-            If TopPoints.Count = 0 Then Throw New InvalidOperationException("No top points found at the structure height.")
-            TopDriftX = TopPoints.Max(Function(p) p.PointDisp.U1.Max(Function(u) Math.Abs(u)))
-            TopDriftY = TopPoints.Max(Function(p) p.PointDisp.U2.Max(Function(u) Math.Abs(u)))
+            'PCR-8 (DriftLimits = split): the top drift limit belongs to the wind (non-seismic) cases only
+            Dim UX = Function(d As FramePointStoryGroupStructures_.LoadCaseDisp_) If(DriftSplit, d.W1, d.U1)
+            Dim UY = Function(d As FramePointStoryGroupStructures_.LoadCaseDisp_) If(DriftSplit, d.W2, d.U2)
+            Dim TopPoints = Points.Where(Function(c) Math.Abs(c.Zcoord - StructureHeight) < COORD_TOL AndAlso UX(c.PointDisp) IsNot Nothing AndAlso UX(c.PointDisp).Count > 0).ToList()
+            If TopPoints.Count = 0 AndAlso DriftSplit Then
+                TopDriftX = 0 : TopDriftY = 0          'no wind case: no top drift constraint
+            Else
+                If TopPoints.Count = 0 Then Throw New InvalidOperationException("No top points found at the structure height.")
+                TopDriftX = TopPoints.Max(Function(p) UX(p.PointDisp).Max(Function(u) Math.Abs(u)))
+                TopDriftY = TopPoints.Max(Function(p) UY(p.PointDisp).Max(Function(u) Math.Abs(u)))
+            End If
             ETABS_print.TopStoryDrifts.Add(TopDriftX)
             ETABS_print.TopStoryDrifts.Add(TopDriftY)
         Catch ex As Exception
@@ -2321,6 +2354,11 @@ Partial Public Class ETABS_Class
             Next
             Strength *= CompositeStrengthFactor
             Dim GroupRatio As Double = Math.Max(Detailing, Strength / CompositeRatioLimit)     'ETABS D/C ratio limit
+            If SCWBActive AndAlso Is2022 Then                                                 'PCR-5b: AISC 341-22 G3.4a moment ratio
+                Dim Scwb As Double = Backend.CompositeScwbRatio(Groups(ID).GroupName)
+                Groups(ID).SCWBRatio = Scwb
+                GroupRatio = Math.Max(GroupRatio, Scwb)
+            End If
             Groups(ID).CompositeStrength = Strength
             Groups(ID).CompositeDetailing = Detailing
             Groups(ID).PMMRatio = GroupRatio
@@ -2395,6 +2433,7 @@ Partial Public Class ETABS_Class
 
     'Steel design: weight of the design groups [kN]
     'Composite columns: relative cost = steel + rebar (per kN) + concrete (per m³) + formwork (per m²)
+    'Filled tubes: the tube steel weight is multiplied by TubeCostFactor (PCR-4)
     Public Function CostStProfile(ByRef Sect_Ind() As Integer) As Double
         Dim StructureWeight As Double = 0
         Dim RebarWeight As Double = 0, ConcreteVolume As Double = 0, FormworkArea As Double = 0
@@ -2402,7 +2441,7 @@ Partial Public Class ETABS_Class
             Dim G = Groups(SteelFrameDesignGroupIDs(i))
             If IsTubeVar(i) Then
                 Dim T As TubeSection_ = Tubes(Sect_Ind(i))
-                StructureWeight += G.GroupLength * T.SteelArea * A992Fy50Weight
+                StructureWeight += G.GroupLength * T.SteelArea * A992Fy50Weight * TubeCostFactor(T)
                 ConcreteVolume += G.GroupLength * T.ConcreteArea * 0.000000001        'mm³ -> m³
             ElseIf FormInfo.CompositeColumns AndAlso G.IsComposite Then
                 Dim S As EncasedIShape = Encased(Sect_Ind(i))
@@ -2439,6 +2478,8 @@ Partial Public Class ETABS_Class
             If IsTubeVar(i) Then
                 Dim Tb As TubeSection_ = Tubes(Sect_Ind(i))
                 x.Kind = "Composite"
+                x.TubeKind = If(Tb.BuiltUp, "BuiltUp", "HSS")
+                x.SteelCostFactor = TubeCostFactor(Tb)
                 x.SteelWeight_kN = G.GroupLength * Tb.SteelArea * A992Fy50Weight
                 x.Concrete_m3 = G.GroupLength * Tb.ConcreteArea * 0.000000001
             ElseIf FormInfo.CompositeColumns AndAlso G.IsComposite Then
@@ -2452,7 +2493,7 @@ Partial Public Class ETABS_Class
                 x.Kind = "Steel"
                 x.SteelWeight_kN = G.GroupLength * WSections(Sect_Ind(i)).Area * A992Fy50Weight
             End If
-            x.SteelCost = uS * x.SteelWeight_kN : x.RebarCost = uR * x.RebarWeight_kN
+            x.SteelCost = uS * x.SteelCostFactor * x.SteelWeight_kN : x.RebarCost = uR * x.RebarWeight_kN
             x.ConcreteCost = uC * x.Concrete_m3 : x.FormworkCost = uF * x.Formwork_m2
             x.TotalCost = x.SteelCost + x.RebarCost + x.ConcreteCost + x.FormworkCost
             L.Add(x)
@@ -2519,7 +2560,8 @@ Partial Public Class ETABS_Class
                     TubeSettings.ConcreteUnitCost = FormInfo.Costs.Concrete
                 End If
                 Errorlogprint("Info: unit costs (" & If(FormInfo.Costs.IsSet, "form", "TubeSections.xml") & "): steel " & TubeSettings.SteelUnitCost &
-                              " /kN, concrete " & TubeSettings.ConcreteUnitCost & " /m3 (filled tubes: no rebar, no formwork)")
+                              " /kN, concrete " & TubeSettings.ConcreteUnitCost & " /m3 (filled tubes: no rebar, no formwork); tube steel factor built-up " &
+                              TubeCostBuiltUp.ToString("0.###", CultureInfo.InvariantCulture) & ", HSS " & TubeCostHSS.ToString("0.###", CultureInfo.InvariantCulture))
                 Return 0
             End If
             'unit costs of the form (MainForm) replace those of the file; old backups have none
@@ -2548,6 +2590,10 @@ Partial Public Class ETABS_Class
         Dim Lw As Boolean
         ret = SapModel.PropMaterial.GetOSteel(STEEL_MATERIAL, M.Fy, Fu, EFy, EFu, SS, SH, s1, s2, s3)
         If (ret <> 0) Then : Errorlogprint("Problem occurred on :PropMaterial.GetOSteel " & STEEL_MATERIAL) : Return ret : End If
+        If TubeMode Then
+            ret = SetTubeSeismicLimits(M.Fy, EFy)       'PCR-5d / 5i (before the catalog)
+            If ret <> 0 Then Return ret
+        End If
         ret = SapModel.PropMaterial.GetMPIsotropic(STEEL_MATERIAL, M.Es, U, A, G)
         If (ret <> 0) Then : Errorlogprint("Problem occurred on :PropMaterial.GetMPIsotropic " & STEEL_MATERIAL) : Return ret : End If
         Dim Concrete As String = CompositeSettings.ConcreteMaterial
@@ -2843,10 +2889,10 @@ Partial Public Class ETABS_Class
             Dim T As TubeSection_ = Tubes(id)
             If T.Shape = TubeShape_.Pipe Then
                 PipeRows.AddRange({CompositeSectionName(id), STEEL_MATERIAL, "No", Fmt(T.H), Fmt(T.t), TubeConcrete, T.Describe()})
-                PipeRows.AddRange(Mods) : NPipe += 1
+                PipeRows.AddRange(TubeModifiers(id, Mods)) : NPipe += 1
             Else
                 BoxRows.AddRange({CompositeSectionName(id), STEEL_MATERIAL, "No", Fmt(T.H), Fmt(T.B), Fmt(T.t), Fmt(T.t), "0", TubeConcrete, T.Describe()})
-                BoxRows.AddRange(Mods) : NBox += 1
+                BoxRows.AddRange(TubeModifiers(id, Mods)) : NBox += 1
             End If
         Next
         If NBox > 0 Then
@@ -3032,7 +3078,8 @@ Partial Public Class ETABS_Class
         End If
         Dim ret As Integer = SapModel.PropFrame.SetGeneral(Name, STEEL_MATERIAL, T.T3, T.T2, T.Area, T.As2, T.As3, T.J, T.I22, T.I33, T.S22, T.S33, T.Z22, T.Z33, T.R22, T.R33, -1, Notes, "")
         If (ret <> 0) Then : Errorlogprint("Problem occurred on :PropFrame.SetGeneral " & Name) : Return ret : End If
-        Dim Modifiers() As Double = {1, 1, 1, 1, 1, 1, T.WeightModifier, T.WeightModifier}
+        Dim Ax As Double = If(CompositeDamActive, 0.8, 1.0), Fl As Double = If(CompositeDamActive, 0.64, 1.0)       'PCR-5f: the General section holds EIeff / Es
+        Dim Modifiers() As Double = {Ax, 1, 1, 1, Fl, Fl, T.WeightModifier, T.WeightModifier}
         ret = SapModel.PropFrame.SetModifiers(Name, Modifiers)
         If (ret <> 0) Then : Errorlogprint("Problem occurred on :PropFrame.SetModifiers " & Name) : Return ret : End If
         CreatedSections.Add(Name)

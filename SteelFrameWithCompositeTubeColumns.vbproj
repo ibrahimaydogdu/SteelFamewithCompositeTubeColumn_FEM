@@ -115,6 +115,8 @@
     <Compile Include="CompositeColumn.vb" />
     <Compile Include="ETABSClass.vb" />
     <Compile Include="ETABSClass.Backends.vb" />
+    <Compile Include="ETABSClass.Aisc341.vb" />
+    <Compile Include="ETABSClass.Cache.vb" />
     <Compile Include="StructureEvaluator.vb" />
     <Compile Include="FemTool\EtabsReader.vb" />
     <Compile Include="Structures.vb" />

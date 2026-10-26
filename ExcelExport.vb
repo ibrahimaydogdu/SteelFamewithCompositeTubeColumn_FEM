@@ -125,11 +125,11 @@ Public Module ExcelExport
     Private Function CostSheet(ByVal Items As List(Of CostItem_), ByVal FI As MiscellaneousStructures.FormInfo_) As Sheet_
         Dim C As New Sheet_("Cost")
         C.Add("Group", "Section", "Type", "Members", "Length [m]", "Steel [kN]", "Rebar [kN]", "Concrete [m3]", "Formwork [m2]",
-              "Steel cost", "Rebar cost", "Concrete cost", "Formwork cost", "Total cost", "Share [%]")
+              "Steel cost", "Rebar cost", "Concrete cost", "Formwork cost", "Total cost", "Share [%]", "Tube kind", "Steel cost factor")
         If Items IsNot Nothing Then
             For Each x In Items
                 C.Add(x.Group, x.Section, x.Kind, x.Members, x.Length_m, x.SteelWeight_kN, x.RebarWeight_kN, x.Concrete_m3, x.Formwork_m2,
-                      x.SteelCost, x.RebarCost, x.ConcreteCost, x.FormworkCost, x.TotalCost, x.Share)
+                      x.SteelCost, x.RebarCost, x.ConcreteCost, x.FormworkCost, x.TotalCost, x.Share, x.TubeKind, x.SteelCostFactor)
             Next
         End If
         C.Add()

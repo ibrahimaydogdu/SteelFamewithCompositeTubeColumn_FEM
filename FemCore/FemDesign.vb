@@ -187,8 +187,28 @@ Public Module SteelDesign
     End Function
 
     'AISC 341 D1.2b: Lb / ry <= 0.095 E / (Ry Fy) (highly ductile) or 0.19 E / (Ry Fy) (moderately ductile) for the beams of the moment frame
+    'AISC 341-22 (Aisc341_2022): D1.2b 0.086 (highly ductile), D1.2a(c) Eq. D1-2 0.17 (moderately ductile)
     Public Function LbRyOk(ByVal S As FemSection, ByVal Lb As Double, ByVal High As Boolean) As Boolean
+        If Aisc341_2022 Then Return Lb / S.R22 <= If(High, 0.086, 0.17) * S.E / (RyAisc * S.Fy)
         Return Lb / S.R22 <= If(High, 0.095, 0.19) * S.E / (RyAisc * S.Fy)
+    End Function
+
+    'Paper 1 (PCR-5c, 5e): True = AISC 341-22 width-to-thickness and bracing limits; False = the limits above (earlier versions). Set by the host.
+    Public Aisc341_2022 As Boolean = False
+
+    'AISC 341-22 Table D1.1b: case 7 flanges bf / 2tf <= 0.30 (highly ductile) or 0.38 (moderately ductile) sqrt(E / Ry Fy); case 11 webs of
+    'moment frame beams and columns h / tw <= 2.5 (1 - Ca)^2.3 or 5.4 (1 - Ca)^2.3 sqrt(E / Ry Fy), Ca = alpha_s Pr / (Ry Fy Ag), alpha_s = 1.0 (LRFD)
+    Public Function Compact2022(ByVal FlangeRatio As Double, ByVal WebRatio As Double, ByVal E As Double, ByVal Fy As Double, ByVal High As Boolean, ByVal Ca As Double) As Boolean
+        Dim Root As Double = Math.Sqrt(E / (RyAisc * Fy))
+        If FlangeRatio > If(High, 0.3, 0.38) * Root Then Return False
+        Dim c As Double = Math.Min(Math.Max(Ca, 0.0), 1.0)
+        Return WebRatio <= If(High, 2.5, 5.4) * Math.Pow(1 - c, 2.3) * Root
+    End Function
+
+    'Seismic compactness of a member with the required axial strength Pr (compression, kN with the units of S): AISC 341-22 or the earlier limits
+    Public Function SeismicCompactPr(ByVal S As FemSection, ByVal High As Boolean, ByVal Pr As Double) As Boolean
+        If Not Aisc341_2022 Then Return SeismicCompact(S, High, Pr / (0.9 * S.Fy * S.A))
+        Return Compact2022(S.Width / (2 * S.FlangeThickness), WebHeight(S) / S.WebThickness, S.E, S.Fy, High, Pr / (RyAisc * S.Fy * S.A))
     End Function
 
 End Module

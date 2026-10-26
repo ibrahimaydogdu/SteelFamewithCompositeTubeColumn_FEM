@@ -147,6 +147,10 @@ Partial Public Class ETABS_Class
         Public Function ReadFrameForces(ByVal Group As String, ByVal Blocks As List(Of ForceBlock)) As Integer Implements IStructureEvaluator.ReadFrameForces
             Return O.EtabsFrameForces(Group, Blocks)
         End Function
+
+        Public Function CompositeScwbRatio(ByVal Group As String) As Double Implements IStructureEvaluator.CompositeScwbRatio
+            Return 0
+        End Function
     End Class
 
     Friend Function EtabsJointDisplacements(ByVal Rows As List(Of DispRow)) As Integer
@@ -219,7 +223,9 @@ Partial Public Class ETABS_Class
                 File.AppendAllLines(DumpFile, L)
             End If
             Dim BCRatios As Dictionary(Of String, Double) = Nothing
-            If NumberItems > 0 AndAlso ErrorSummary IsNot Nothing AndAlso ErrorSummary.Any(Function(m) m IsNot Nothing AndAlso m.Contains(BC_MESSAGE)) Then BCRatios = ReadBeamColumnRatios()
+            If NumberItems > 0 AndAlso ErrorSummary IsNot Nothing AndAlso ErrorSummary.Any(Function(m) m IsNot Nothing AndAlso m.Contains(BC_MESSAGE)) AndAlso
+               Not IgnoreEtabsBeamColumnMessages Then BCRatios = ReadBeamColumnRatios()
+            Dim SkipBC As Boolean = BCRatios IsNot Nothing OrElse IgnoreEtabsBeamColumnMessages     'beam/column-only messages are not design errors
             For i = 0 To SteelFrameDesignGroupIDs.Count - 1
                 Dim ID As Integer = SteelFrameDesignGroupIDs(i)
                 If CompositeActive AndAlso Groups(ID).IsComposite Then Continue For
@@ -228,9 +234,11 @@ Partial Public Class ETABS_Class
                 Dim GD As New GroupDesign With {.MaxRatio = Items.Max(Function(j) Ratio(j)), .Items = Items.Count}
                 'a beam/column capacity ratio above the limit (AISC 341 strong column - weak beam) is a continuous constraint: its ratio
                 'goes into the ratio of the group instead of the error count
-                If BCRatios IsNot Nothing Then BCRatios.TryGetValue(Groups(ID).GroupName, GD.BCRatio)
-                GD.ErrorCount = Items.Where(Function(j) Not String.IsNullOrEmpty(ErrorSummary(j)) AndAlso Not (BCRatios IsNot Nothing AndAlso OnlyBeamColumnMessage(ErrorSummary(j)))).Count()
-                If GD.ErrorCount > 0 Then LogDesignErrors(Groups(ID).GroupName, Items, FrameName, ErrorSummary, BCRatios IsNot Nothing)
+                'PCR-5g: the joint ratio of ETABS does not apply to the corner columns (storey check and corner strength check of the FEM module)
+                Dim CornerBC As Boolean = CornerScwbGroup(Groups(ID).GroupName)
+                If BCRatios IsNot Nothing AndAlso Not CornerBC Then BCRatios.TryGetValue(Groups(ID).GroupName, GD.BCRatio)
+                GD.ErrorCount = Items.Where(Function(j) Not String.IsNullOrEmpty(ErrorSummary(j)) AndAlso Not ((SkipBC OrElse CornerBC) AndAlso OnlyBeamColumnMessage(ErrorSummary(j)))).Count()
+                If GD.ErrorCount > 0 Then LogDesignErrors(Groups(ID).GroupName, Items, FrameName, ErrorSummary, SkipBC OrElse CornerBC)
                 If updateDesignSections Then
                     'largest (by area) design section of the group
                     Dim BestName As String = Nothing
@@ -302,6 +310,15 @@ Partial Public Class ETABS_Class
                 Dim M As FemModel = Rd.Read()
                 Owner.SapModel.SetPresentUnits(Units)
                 If M.Prefs.DirectAnalysis Then M.AxialFactor = 0.8 : M.FlexuralFactor = 0.8
+                M.CompositeScwb = Owner.Is2022 AndAlso Owner.SCWBActive AndAlso Owner.TubeMode       'PCR-5b
+                M.ScwbBeamCode = Owner.ScwbBeamSide = "code"
+                If Owner.Is2022 AndAlso Owner.SCWBActive Then                                       'PCR-5g
+                    Dim Why As String = Nothing
+                    If Not Owner.CornerGravityCombo(M.CornerGravity, Why) OrElse Owner.PrefOmega0 <= 0 Then
+                        Reason = "AISC 341-22 corner check: " & If(Why, "Omega0 of the design preferences missing") : Return Nothing
+                    End If
+                    M.CornerScwb = True : M.Omega0 = Owner.PrefOmega0
+                End If
                 'harmless notes: sections that are assigned from the catalog later, diaphragms defined by shell objects (the joints carry the diaphragm), modal cases
                 Dim Notes = M.Notes.Where(Function(n) Not n.StartsWith("section ") AndAlso Not n.StartsWith("diaphragm from shell objects") AndAlso Not n.EndsWith(" is Modal (not static)")).ToList()
                 If Notes.Count > 0 Then Reason = "unsupported model features: " & String.Join("; ", Notes) : Return Nothing
@@ -390,6 +407,14 @@ Partial Public Class ETABS_Class
                 .I22 = T.I22 / 1.0E+12, .I33 = T.I33 / 1.0E+12, .S22 = T.S22 / 1.0E+9, .S33 = T.S33 / 1.0E+9, .Z22 = T.Z22 / 1.0E+9, .Z33 = T.Z33 / 1.0E+9,
                 .R22 = T.R22 / 1000, .R33 = T.R33 / 1000}
             S.Modifier(6) = T.WeightModifier : S.Modifier(7) = T.WeightModifier
+            If O.CompositeDamActive Then S.DamAxial = 0.8 : S.DamFlexural = 0.64          'PCR-5f: I is EIeff / Es
+            If O.TubeMode AndAlso O.Is2022 Then                                           'PCR-5b: G3.4a moment ratio of composite columns
+                Dim C As CompositeSection = O.CompositeSec(Index)
+                S.Mpcc = Function(P As Double, Plane As Integer) C.PlasticMomentAtAxial(If(Plane = 0, BendingAxis_.Major, BendingAxis_.Minor), P) / 1000.0    'kN mm -> kN m
+                S.Pyc = C.Pno()
+                Dim SecIndex As Integer = Index
+                S.CompositeCheck = Function(P As Double, Mx As Double, My As Double, L As Double) O.CompositeInteraction(SecIndex, P, Mx, My, L)    'PCR-5g
+            End If
             CompositeSections(Index) = S
             Return S
         End Function
@@ -479,13 +504,23 @@ Partial Public Class ETABS_Class
             Return 0
         End Function
 
+        Public Function CompositeScwbRatio(ByVal Group As String) As Double Implements IStructureEvaluator.CompositeScwbRatio
+            If Not Model.CompositeScwb OrElse Current.Failed Then Return 0
+            If Not Designed Then Fem.Design(Current) : Designed = True
+            Dim R As Double = 0
+            For Each e In GroupElements(Group)
+                R = Math.Max(R, Math.Max(Current.BCMajor(e), Current.BCMinor(e)))
+            Next
+            Return R
+        End Function
+
         Public Function ReadSteelDesign(ByVal Result As Dictionary(Of String, GroupDesign)) As Integer Implements IStructureEvaluator.ReadSteelDesign
             Dim c = O.Clock("SteelDesign") : c.Start()
             Try
                 If Not Designed AndAlso Not Current.Failed Then Fem.Design(Current) : Designed = True
                 If Current.Failed Then O.AnalysisFailed = True
                 Dim Errors() As Boolean = Nothing
-                If Not Current.Failed AndAlso O.SCWBActive Then Errors = Fem.SeismicErrors(Current, O.DuctilityLevel <> "Moderate")
+                If Not Current.Failed AndAlso O.SeismicChecksActive Then Errors = Fem.SeismicErrors(Current, O.DuctilityLevel <> "Moderate")
                 Dim DumpFile As String = Environment.GetEnvironmentVariable("FEM_DUMP")
                 If Not String.IsNullOrEmpty(DumpFile) AndAlso Not Current.Failed Then
                     Dim L As New List(Of String) From {"#EVAL"}
@@ -503,16 +538,14 @@ Partial Public Class ETABS_Class
                         GD.Items += 1
                         If Current.Failed Then Continue For
                         Dim m = Current.Members(e)
-                        Dim Bad As Boolean = O.SCWBActive AndAlso Errors(e)
+                        Dim Bad As Boolean = O.SeismicChecksActive AndAlso Errors(e)
                         'ETABS leaves the beam/column capacity ratio blank for a member that has another design error
                         Dim BCr As Double = If(O.SCWBActive AndAlso Not Bad, Math.Max(Current.BCMajor(e), Current.BCMinor(e)), 0.0)
                         Dim BCBad As Boolean = BCr > 1.0       'beam/column capacity error
                         'ETABS gives no ratio to a member with a design error (not seismically compact, Lb/ry, beam/column capacity)
                         If Not Bad AndAlso Not BCBad Then GD.MaxRatio = Math.Max(GD.MaxRatio, RatioMargin * Math.Max(m.PMM, Math.Max(m.VMaj, m.VMin)))
-                        If O.SCWBActive Then
-                            GD.BCRatio = Math.Max(GD.BCRatio, BCr)
-                            If Bad Then GD.ErrorCount += 1
-                        End If
+                        If O.SCWBActive Then GD.BCRatio = Math.Max(GD.BCRatio, BCr)
+                        If Bad Then GD.ErrorCount += 1
                     Next
                     If GD.Items > 0 Then Result(G) = GD
                 Next

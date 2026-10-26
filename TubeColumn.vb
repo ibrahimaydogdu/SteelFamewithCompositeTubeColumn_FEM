@@ -85,6 +85,9 @@ Public Class TubeSettings_
     'Relative unit costs of the objective function (composite mode, steel = 1); the form values replace them
     Public SteelUnitCost As Double = 1.0         'per kN of structural steel
     Public ConcreteUnitCost As Double = 0.6      'per m³ of concrete
+    'Set by the optimizer (not in the file): AISC 341-22 wall limits with Ry (PCR-5d); Ry = expected / specified yield stress of the model steel
+    <XmlIgnore> Public Edition2022 As Boolean = False
+    <XmlIgnore> Public Ry As Double = 1.0
 
     Public Shared Function DefaultPath() As String
         Return IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TubeSections.xml")
@@ -109,12 +112,13 @@ Public Class TubeSettings_
         Return If(Shape = TubeShape_.Pipe, PipePrefix, BoxPrefix)
     End Function
 
-    'Wall slenderness limit of the seismic ductility level (Double.MaxValue: no limit)
+    'Wall slenderness limit of the seismic ductility level (Double.MaxValue: no limit). Edition2022: boxes AISC 341-22 Table D1.1b case 17,
+    'b/t <= 1.40 (high) / 2.26 (moderate) sqrt(E / Ry Fy); pipes keep the limits above (not used in Paper 1, Pipes = false)
     Public Function SeismicLimit(ByVal Shape As TubeShape_, ByVal Mat As CompositeMaterial_) As Double
         If SeismicDuctility = SeismicDuctility_.None Then Return Double.MaxValue
         Dim High As Boolean = SeismicDuctility = SeismicDuctility_.High
         If Shape = TubeShape_.Pipe Then Return If(High, 0.076, 0.15) * Mat.Es / Mat.Fy
-        Return If(High, 1.4, 2.26) * Math.Sqrt(Mat.Es / Mat.Fy)
+        Return If(High, 1.4, 2.26) * Math.Sqrt(Mat.Es / (If(Edition2022, Ry, 1.0) * Mat.Fy))
     End Function
 
     'Wall slenderness for the seismic check: pipe D/t, box b/t of the wider wall
@@ -185,7 +189,8 @@ Public Class TubeSettings_
                     OrderBy(Function(s) s.SteelArea).ThenBy(Function(s) s.H).ToList()
         Log = "tube catalog: " & Kept.Count & " sections (library " & NLib & ", built-up " & NBu & "; removed: " &
               (Before - L.Count) & " below " & MinDimension & " mm, " & NSlender & " beyond lambda_max, " & NSeismic & " beyond the " &
-              SeismicDuctility.ToString().ToLowerInvariant() & " ductility limit (TBDY 2018 Table 9.3), duplicates merged)"
+              SeismicDuctility.ToString().ToLowerInvariant() & " ductility limit (" &
+              If(Edition2022, "AISC 341-22 Table D1.1b case 17, Ry " & Ry.ToString("0.###", CultureInfo.InvariantCulture), "TBDY 2018 Table 9.3") & "), duplicates merged)"
         Return Kept
     End Function
 End Class

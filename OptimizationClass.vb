@@ -421,6 +421,98 @@ Partial Public Class OptimizationClass
     Private Const FEM_GUARD_STEPS As Integer = 6
     Private Const FEM_CANDIDATES As Integer = 10
 
+    'PCR-5h (FinalProtocol = unmodified): result of the final verification
+    Private FinalProtocolUsed As String = "legacy"
+    Private VerifiedUnmodified As Boolean
+    Private VerifiedRank As Integer = -1           '0 = best design, k = k-th archive candidate (cost order), -1 = none passed
+    Private GuardSteps As Integer
+    Private GuardedCost As Double
+
+    'Final verification without modification: the best design and up to FEM_CANDIDATES designs of the FEM archive (feasible in the FEM
+    'evaluator with all its checks, incl. the AISC 341-22 checks), in cost order, are analysed in ETABS as they are; a design passes when its
+    'ETABS penalty is 0 and, with composite columns, every group passes the ETABS composite column design. The first design that passes is
+    'the result. If none passes, the guard steps still run for the diagnosis (cost, steps), but the run is a failed verification.
+    Private Function FinalizeUnmodified(ByRef Final As OptimizationStructure_.Member_, ByVal FemPenalty As Double) As Integer
+        Dim ret As Integer = 0, VerifyRet As Integer = 0
+        VerifiedUnmodified = False : VerifiedRank = -1 : GuardSteps = 0 : GuardedCost = 0
+        LogError("Info: best design, FEM penalty " & FemPenalty.ToString("G4") & ", ETABS penalty " & Final.Penalty.ToString("G4") & ", cost " & Final.CostValue.ToString("F2"))
+        Dim Composite As Boolean = FormInfo.CompositeColumns
+        Dim BestKey As String = String.Join(",", GlobalBest.DesignVariables)
+        Dim Archive = ETABSModel.FeasibleArchive().Where(Function(c) String.Join(",", c.DesignVariables) <> BestKey AndAlso c.CostValue >= GlobalBest.CostValue).
+                      Take(FEM_CANDIDATES).ToList()
+        Dim Current As OptimizationStructure_.Member_ = Final
+        Dim BestFail As OptimizationStructure_.Member_ = Final
+        Dim Rank As Integer = 0
+        Do
+            Dim Why As String = Nothing
+            If FinalPasses(Current, Composite, VerifyRet, Why) Then
+                Final = Current : VerifiedUnmodified = True : VerifiedRank = Rank
+                LogError("Info: final verification passed without modification: " & If(Rank = 0, "best design", "archive candidate " & Rank & " (cost order)") & ", cost " & Final.CostValue.ToString("F2"))
+                Exit Do
+            End If
+            LogError("Info: final verification, " & If(Rank = 0, "best design", "archive candidate " & Rank) & " (cost " & Current.CostValue.ToString("F2") & ") does not pass: " & Why)
+            If Current.Penalty < BestFail.Penalty Then BestFail = Current
+            If Rank >= Archive.Count Then Exit Do
+            Dim Cand As OptimizationStructure_.Member_ = Archive(Rank)
+            Rank += 1
+            ETABS_Class.Report("ETABS check of the next feasible FEM design (" & Rank & ")")
+            Current = Cand
+            Current.DesignVariables = CType(Cand.DesignVariables.Clone(), Integer())
+            ETABSModel.Evaluate(Current, iter, ret, applyRepair:=False)
+            If ret <> 0 Then : LogError("Problem occurred in :Evaluate (next FEM candidate)") : Exit Do : End If
+        Loop
+        If Not VerifiedUnmodified Then
+            'diagnosis only: guard steps on the design with the smallest penalty; the run counts as a failed verification
+            Final = BestFail
+            ETABSModel.Evaluate(Final, iter, ret, applyRepair:=False)
+            For Guard = 1 To FEM_GUARD_STEPS
+                If ret <> 0 OrElse Final.Penalty <= 0 Then Exit For
+                Dim Vars() As Integer = CType(Final.DesignVariables.Clone(), Integer())
+                If ETABSModel.StepUpViolations(Vars) = 0 Then Exit For
+                Dim Guarded As OptimizationStructure_.Member_ = Final
+                Guarded.DesignVariables = Vars
+                ETABSModel.Evaluate(Guarded, iter, ret, applyRepair:=False)
+                If ret <> 0 Then Exit For
+                Final = Guarded : GuardSteps += 1
+            Next
+            If Composite AndAlso ret = 0 Then
+                VerifyRet = ETABSModel.VerifyCompositeWithETABS()
+                For Guard = 1 To ETABS_GUARD_STEPS
+                    If VerifyRet <> 0 Then Exit For
+                    Dim Vars() As Integer = CType(Final.DesignVariables.Clone(), Integer())
+                    If ETABSModel.StepUpETABSFailures(Vars) = 0 Then Exit For
+                    Dim Guarded As OptimizationStructure_.Member_ = Final
+                    Guarded.DesignVariables = Vars
+                    ETABSModel.Evaluate(Guarded, iter, ret, applyRepair:=False)
+                    If ret <> 0 Then Exit For
+                    Final = Guarded : GuardSteps += 1
+                    VerifyRet = ETABSModel.VerifyCompositeWithETABS()
+                Next
+            End If
+            GuardedCost = Final.CostValue
+            LogError("Warning: final verification failed: no design passes without modification (" & Rank + 1 & " designs checked); guard steps " & GuardSteps &
+                     ", guarded cost " & GuardedCost.ToString("F2") & " (diagnosis only, not a result)")
+        End If
+        FinalCheck = Final
+        FinalConstraints = ETABSModel.ConstraintSummary()
+        For Each c In FinalConstraints
+            LogError("Info: final design, " & c)
+        Next
+        FinalFails = Not VerifiedUnmodified
+        Return VerifyRet
+    End Function
+
+    'A design analysed in ETABS passes the final check: ETABS penalty 0 and, with composite columns, the ETABS composite column design
+    Private Function FinalPasses(ByVal M As OptimizationStructure_.Member_, ByVal Composite As Boolean, ByRef VerifyRet As Integer, ByRef Why As String) As Boolean
+        If M.Penalty > 0 Then Why = "ETABS penalty " & M.Penalty.ToString("G4") : Return False
+        If Not Composite Then Return True
+        VerifyRet = ETABSModel.VerifyCompositeWithETABS()
+        If VerifyRet <> 0 Then Why = "ETABS composite column design not available" : Return False
+        Dim Worst As Double = If(ETABSModel.ETABSRatioByVar.Count > 0, ETABSModel.ETABSRatioByVar.Values.Max(), 0)
+        If Worst > 1 Then Why = "ETABS composite column design ratio " & Worst.ToString("F3") : Return False
+        Return True
+    End Function
+
     Public Sub Opt_Finalize()
         Dim ret As Integer = 0
         FinalFails = False
@@ -458,6 +550,11 @@ Partial Public Class OptimizationClass
             If ret <> 0 Then
                 LogError("Problem occurred in :Evaluate (final analysis)")
             Else
+                Dim VerifyRet As Integer = 0
+                FinalProtocolUsed = If(FemUsed, ETABSModel.FinalProtocol, "legacy")
+                If FemUsed AndAlso ETABSModel.FinalProtocol = "unmodified" Then
+                    VerifyRet = FinalizeUnmodified(Final, FemPenalty)
+                Else
                 If FemUsed Then
                     LogError("Info: best design, FEM penalty " & FemPenalty.ToString("G4") & ", ETABS penalty " & Final.Penalty.ToString("G4") & ", cost " & Final.CostValue.ToString("F2"))
                     'the best FEM design is slightly infeasible in ETABS: the next cheapest designs that the FEM evaluator found feasible are checked
@@ -508,7 +605,7 @@ Partial Public Class OptimizationClass
                 FinalFails = Final.Penalty > 0
                 If Final.Penalty > 0 Then LogError("Warning: final analysis of the best design (all analysis cases, no repair) gives penalty " & Final.Penalty.ToString("G4"))
                 'composite columns of the best design: ETABS composite column design (ETABS 20+)
-                Dim VerifyRet As Integer = ETABSModel.VerifyCompositeWithETABS()
+                VerifyRet = ETABSModel.VerifyCompositeWithETABS()
                 If VerifyRet <> 0 Then LogError("Problem occurred in :VerifyCompositeWithETABS")
                 'ETABS guard: a composite group failing the ETABS design gets the next section, the design is checked again
                 For Guard = 1 To ETABS_GUARD_STEPS
@@ -531,6 +628,7 @@ Partial Public Class OptimizationClass
                 If ETABSModel.ETABSRatioByVar.Values.Any(Function(r) r > 1) Then
                     FinalFails = True
                     LogError("Warning: final design still fails the ETABS composite design, see the composite check")
+                End If
                 End If
                 ETABSCompositeCheck = ETABSModel.ETABS_print.ETABSCompositeCheck
                 'cost breakdown and sections of the final design (= the best design unless the ETABS guard changed it)
@@ -645,7 +743,12 @@ Partial Public Class OptimizationClass
             .Seed = FormInfo.Seed,
             .ETABSCompositeCheck = ETABSCompositeCheck,
             .FinalCheck = FinalCheck,
-            .FinalConstraints = FinalConstraints
+            .FinalConstraints = FinalConstraints,
+            .FinalProtocol = FinalProtocolUsed,
+            .VerifiedUnmodified = If(FinalProtocolUsed = "unmodified", VerifiedUnmodified, Not FinalFails),
+            .VerifiedCandidateRank = VerifiedRank,
+            .GuardSteps = GuardSteps,
+            .GuardedCost = GuardedCost
         }
         Dim serializer As New XmlSerializer(GetType(ClassFinal))
         Using writer As New StreamWriter(FileList.OutputFile)
@@ -678,6 +781,13 @@ Public Class ClassFinal
     Public CostBreakdown As List(Of CostItem_)
     Public FinalDesignPrint As List(Of String)
     Public FormInfo As MiscellaneousStructures.FormInfo_      'settings of the run (Excel export of the file)
+    'PCR-5h: final verification protocol (legacy | unmodified); VerifiedUnmodified: the reported design passed every final check as it is
+    '(legacy: = not FinalFails, guard steps may have changed it); rank 0 = best design, k = archive candidate, -1 = none; guard data: diagnosis only
+    Public FinalProtocol As String = "legacy"
+    Public VerifiedUnmodified As Boolean
+    Public VerifiedCandidateRank As Integer = -1
+    Public GuardSteps As Integer
+    Public GuardedCost As Double
 End Class
 Public Class Class_Backup
     Public Memory As List(Of OptimizationStructure_.Member_)

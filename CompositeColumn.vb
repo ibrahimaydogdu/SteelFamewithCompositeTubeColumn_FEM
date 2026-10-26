@@ -169,6 +169,37 @@ Public MustInherit Class CompositeSection
         Return M
     End Function
 
+    'Plastic stress distribution method (AISC I1.2a) with the axial compression Prc (compression positive, same units as Fy x area):
+    'neutral axis from sum F = Prc, moment about the centroid. AISC 341-22 G3.4a: Mpcc of a composite column at the required axial strength.
+    'Prc <= 0 (tension or none): pure bending; Prc at or above the squash load: 0. PlasticMomentAtAxial(axis, 0) = PlasticMoment(axis).
+    Public Function PlasticMomentAtAxial(ByVal axis As BendingAxis_, ByVal Prc As Double) As Double
+        If Prc <= 0 Then Return PlasticMoment(axis)
+        Dim fb As List(Of Fiber_) = Fibers(axis)
+        Dim fcc As Double = ConcreteStressFactor * Mat.fc
+        Dim Stress = Function(f As Fiber_, comp As Boolean) As Double
+                         Select Case f.Kind
+                             Case FiberKind_.Steel : Return If(comp, Mat.Fy, -Mat.Fy)
+                             Case FiberKind_.Rebar : Return If(comp, Mat.Fysr, -Mat.Fysr)
+                             Case Else : Return If(comp, fcc, 0)
+                         End Select
+                     End Function
+        Dim Force = Function(y0 As Double) As Double
+                        Dim Sum As Double = 0
+                        For Each f In fb
+                            Sum += Stress(f, f.Pos > y0) * f.Area
+                        Next
+                        Return Sum
+                    End Function
+        Dim Half As Double = 0.5 * Extent(axis)
+        If Prc >= Force(-Half - 1) Then Return 0
+        Dim y As Double = Bisect(Function(y0) Force(y0) - Prc, -Half - 1, Half + 1)
+        Dim M As Double = 0
+        For Each f In fb
+            M += Stress(f, f.Pos > y) * f.Area * f.Pos
+        Next
+        Return Math.Abs(M)
+    End Function
+
     'Strain compatibility method (AISC I1.2b), pure bending: linear strain, eps_cu = 0.003 at the extreme compression
     'fiber, concrete Whitney block 0.85 f'c over beta1 c (ACI 318), steel and bars elastic - perfectly plastic.
     Public Function StrainCompatibilityMoment(ByVal axis As BendingAxis_) As Double

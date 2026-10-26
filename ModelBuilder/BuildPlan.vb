@@ -52,6 +52,8 @@ Public Class BuildPlan_
         B.XLines.Add(0) : For Each d In Bx : B.XLines.Add(Math.Round(B.XLines.Last() + d, 4)) : Next
         B.YLines.Add(0) : For Each d In By : B.YLines.Add(Math.Round(B.YLines.Last() + d, 4)) : Next
         Dim nx As Integer = Bx.Count, ny As Integer = By.Count, N As Integer = P.Stories
+        Dim Rotated = P.RotatedInterior(nx, ny, Msg)
+        If Rotated Is Nothing Then Throw New ArgumentException("InteriorRotated: " & Msg)
         B.Levels.Add(0)
         For k = 1 To N : B.Levels.Add(Math.Round(P.FirstStoryHeight + (k - 1) * P.StoryHeight, 4)) : Next
 
@@ -77,6 +79,7 @@ Public Class BuildPlan_
                     Dim Kind As String = If(ei AndAlso ej, "Corner", If(ei OrElse ej, "Edge", "Interior"))
                     Dim C As New PlanColumn_ With {.X = B.XLines(i), .Y = B.YLines(j), .Z1 = B.Levels(k - 1), .Z2 = B.Levels(k), .Story = k, .Kind = Kind}
                     If P.ColumnOrientation = "Auto" AndAlso Kind = "Edge" AndAlso ei Then C.Angle = 90      'edge column of an x = const line: the y frame bends it about the strong axis
+                    If Kind = "Interior" AndAlso Rotated.Contains(Tuple.Create(i, j)) Then C.Angle = 90
                     C.Group = "COL-" & Kind.ToUpperInvariant() & "-" & Band(k)
                     B.Columns.Add(C) : Reg(C.Group, True, Kind, 0, k)
                 Next
@@ -135,6 +138,9 @@ Public Class BuildPlan_
         Sb.AppendLine("Plan " & F(XLines.Last()) & " x " & F(YLines.Last()) & " m (" & (XLines.Count - 1) & " x " & (YLines.Count - 1) & " bays), " & P.Stories & " stories, height " & F(Height) & " m")
         Sb.AppendLine("System: " & P.FrameSystem & If(P.FrameSystem = "Perimeter", " (interior column base " & P.InteriorColumnBase & ")", "") & ", group band " & P.StoryBand & " stories")
         Sb.AppendLine("Columns " & Columns.Count & ", beams " & Beams.Count & " (moment " & Beams.Where(Function(b) b.Moment).Count() & ", pinned " & Beams.Where(Function(b) Not b.Moment).Count() & "), floor areas " & Cells.Count)
+        Dim Rot = Columns.Where(Function(c) c.Angle <> 0 AndAlso c.Story = 1).ToList()
+        Sb.AppendLine("Columns rotated by 90 degrees (per story): edge " & Rot.Where(Function(c) c.Kind = "Edge").Count() & ", interior " & Rot.Where(Function(c) c.Kind = "Interior").Count() &
+                      If(Rot.Any(Function(c) c.Kind = "Interior"), " at " & String.Join(" ", Rot.Where(Function(c) c.Kind = "Interior").Select(Function(c) "(" & F(c.X) & "," & F(c.Y) & ")")), ""))
         Sb.AppendLine("Groups: " & ColumnGroups.Count() & " column, " & BeamGroups.Count() & " beam (" & Groups.Count & " design variables)")
         For Each G In Groups
             Sb.AppendLine("  " & G.Name.PadRight(26) & G.Count.ToString().PadLeft(5) & " members, stories " & G.FirstStory & "-" & G.LastStory)

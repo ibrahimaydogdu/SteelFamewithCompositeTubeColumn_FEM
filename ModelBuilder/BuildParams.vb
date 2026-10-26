@@ -19,6 +19,7 @@ Public Class BuildParams_
     Public InteriorColumnBase As String = "Fixed"   'base of the interior (gravity) columns of the Perimeter system: Fixed | Pinned
     Public BeamBracingSpacing As Double = 2.5       'lateral bracing spacing of the beams [m] (secondary beams / deck): the unbraced length of a beam is its span divided into ceil(span / spacing) equal parts; 0 = unbraced over the whole span. AISC 341 D1.2b limits Lb/ry of the SMF beams
     Public ColumnOrientation As String = "Auto"    'Auto: the edge columns of the lines x = const (frames in the y direction) are rotated by 90 degrees, so that their strong axis lies in the plane of the frame; corner and interior columns keep the default (strong axis in the x frames) | None: all columns keep the default
+    Public InteriorRotated As String = ""           'interior columns rotated by 90 degrees (strong axis in the y frames): empty = none | Center = the interior columns on the middle grid lines (two lines for an odd bay count) | list of grid line indices "i:j i:j" (0 = first line)
     Public StoryBand As Integer = 3                 'stories per member group (the groups change every StoryBand stories)
 
     '--- materials and section pools
@@ -103,6 +104,31 @@ Public Class BuildParams_
         Return L
     End Function
 
+    'Grid positions (i, j) of the rotated interior columns of InteriorRotated; Nothing = not valid
+    Public Function RotatedInterior(ByVal nx As Integer, ByVal ny As Integer, ByRef Message As String) As HashSet(Of Tuple(Of Integer, Integer))
+        Dim S As New HashSet(Of Tuple(Of Integer, Integer))
+        Dim T As String = If(InteriorRotated, "").Trim()
+        If T.Length = 0 Then Return S
+        If T.Equals("Center", StringComparison.OrdinalIgnoreCase) Then
+            Dim Mid = Function(n As Integer) If(n Mod 2 = 0, {n \ 2}, {(n - 1) \ 2, (n + 1) \ 2})
+            For Each i In Mid(nx)
+                For Each j In Mid(ny)
+                    If i > 0 AndAlso i < nx AndAlso j > 0 AndAlso j < ny Then S.Add(Tuple.Create(i, j))
+                Next
+            Next
+            Return S
+        End If
+        For Each Item In T.Split({" "c, ";"c, "/"c}, StringSplitOptions.RemoveEmptyEntries)
+            Dim P = Item.Split(":"c)
+            Dim i, j As Integer
+            If P.Length <> 2 OrElse Not Integer.TryParse(P(0), NumberStyles.Integer, CultureInfo.InvariantCulture, i) OrElse
+               Not Integer.TryParse(P(1), NumberStyles.Integer, CultureInfo.InvariantCulture, j) Then Message = "'" & Item & "' is not i:j" : Return Nothing
+            If i <= 0 OrElse i >= nx OrElse j <= 0 OrElse j >= ny Then Message = "'" & Item & "' is not an interior column" : Return Nothing
+            S.Add(Tuple.Create(i, j))
+        Next
+        Return S
+    End Function
+
     'Errors of the parameters (empty list = valid)
     Public Function Validate() As List(Of String)
         Dim E As New List(Of String), M As String = Nothing
@@ -114,6 +140,8 @@ Public Class BuildParams_
         If Not {"Perimeter", "Space"}.Contains(FrameSystem) Then E.Add("FrameSystem must be Perimeter or Space")
         If Not {"Fixed", "Pinned"}.Contains(InteriorColumnBase) Then E.Add("InteriorColumnBase must be Fixed or Pinned")
         If Not {"Auto", "None"}.Contains(ColumnOrientation) Then E.Add("ColumnOrientation must be Auto or None")
+        Dim Bx = ParseBays(BaysX, M), By = ParseBays(BaysY, M)
+        If Bx IsNot Nothing AndAlso By IsNot Nothing AndAlso RotatedInterior(Bx.Count, By.Count, M) Is Nothing Then E.Add("InteriorRotated: " & M)
         If BeamBracingSpacing < 0 Then E.Add("BeamBracingSpacing must be 0 or positive")
         If StoryBand < 1 Then E.Add("StoryBand must be at least 1")
         If ConcreteFc < 10 OrElse ConcreteFc > 100 Then E.Add("ConcreteFc must be 10 to 100 MPa")

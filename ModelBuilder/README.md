@@ -37,6 +37,7 @@ Birimler: m, kN, kPa, MPa, m/s, g, s. Bay uzunlukları `3x9 6` biçiminde (9, 9,
 | `InteriorColumnBase` | Fixed | Perimeter sisteminde iç kolon tabanı: `Fixed` / `Pinned` |
 | `BeamBracingSpacing` | 2.5 | Kirişlerin yanal destek aralığı (m; ikincil kiriş / döşeme desteği). Her kirişin desteksiz boyu, açıklığın `ceil(açıklık / aralık)` eşit parçaya bölünmesiyle alınır (tasarım overwrite `LMinor`, `LTB`). 0 = açıklık boyunca desteksiz. AISC 341 D1.2b SMF kirişlerinde Lb/ry'yi sınırlar; destek tanımlı değilse çoğu kesit reddedilir |
 | `ColumnOrientation` | Auto | `Auto`: x = sabit çizgilerdeki kenar kolonlar (Y yönündeki çerçevelerin kolonları) 90° döndürülür; güçlü eksenleri çerçeve düzleminde olur. Köşe ve iç kolonlar varsayılan yönde kalır. `None`: hepsi varsayılan yönde |
+| `InteriorRotated` | (boş) | 90° döndürülen iç kolonlar (güçlü eksen y çerçevelerinde): boş = yok; `Center` = orta aks çizgilerindeki iç kolonlar (tek açıklık sayısında iki çizgi; 5 açıklıkta merkez 2×2); ya da aks indisleri `i:j i:j` (0 = ilk aks) |
 | `StoryBand` | 3 | Kaç katta bir grup değişir |
 | `ConcreteFc` | 27.58 | Tüp dolgu betonu f'c (MPa); malzeme `<psi>Psi` adıyla (27,58 = `4000Psi`) |
 | `BeamMinDepth`, `BeamMaxDepth` | 250, 920 | Kiriş havuzu derinlik aralığı (mm) |

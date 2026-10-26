@@ -28,6 +28,9 @@ Friend NotInheritable Class DialogGuard
     Private Shared Function IsWindowVisible(ByVal h As IntPtr) As Boolean
     End Function
     <DllImport("user32.dll")>
+    Private Shared Function GetDlgCtrlID(ByVal h As IntPtr) As Integer
+    End Function
+    <DllImport("user32.dll")>
     Private Shared Function PostMessage(ByVal h As IntPtr, ByVal m As Integer, ByVal w As IntPtr, ByVal l As IntPtr) As Boolean
     End Function
 
@@ -81,10 +84,18 @@ Friend NotInheritable Class DialogGuard
                                                 GetClassName(k, C, 64) : GetWindowText(k, T, 1024)
                                                 If C.ToString() = "Button" Then
                                                     Buttons += 1
-                                                    Select Case T.ToString().Replace("&", "")
-                                                        Case "Yes" : Yes = k
-                                                        Case "No" : No = k
-                                                        Case "OK" : Ok = k
+                                                    'message box buttons by their control ID (IDOK 1, IDYES 6, IDNO 7): the button texts follow the
+                                                    'language of Windows ("Evet" / "Hayır" / "Tamam" on Turkish Windows)
+                                                    Select Case GetDlgCtrlID(k)
+                                                        Case 6 : Yes = k
+                                                        Case 7 : No = k
+                                                        Case 1 : Ok = k
+                                                        Case Else
+                                                            Select Case T.ToString().Replace("&", "")
+                                                                Case "Yes" : Yes = k
+                                                                Case "No" : No = k
+                                                                Case "OK" : Ok = k
+                                                            End Select
                                                     End Select
                                                 ElseIf C.ToString() = "Static" AndAlso T.Length > 0 Then
                                                     If Msg.Length > 0 Then Msg.Append(" ")

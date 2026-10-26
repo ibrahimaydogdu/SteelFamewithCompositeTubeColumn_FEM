@@ -112,7 +112,7 @@ Partial Public Class ETABS_Class
             If Not IsColumnVar(v) Then
                 GMode(v) = GroupColumnType_.Steel
             ElseIf Not Settings.TryGetValue(Groups(id).GroupName, GMode(v)) Then
-                GMode(v) = GroupColumnType_.Optimize
+                GMode(v) = If(SteelInteriorGroup(Groups(id).GroupName), GroupColumnType_.Steel, GroupColumnType_.Optimize)     'PCR-7
             End If
             Groups(id).IsComposite = GMode(v) = GroupColumnType_.Composite
         Next

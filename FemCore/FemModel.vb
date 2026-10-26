@@ -22,6 +22,11 @@ Public Class FemSection
     Public Fy, Fu As Double                     'kN/m2
     Public S22, S33, Z22, Z33, R22, R33 As Double       'elastic and plastic moduli, radii of gyration
     Public NoDesign As Boolean                  'not designed by the steel design (composite column: own check from the station forces)
+    Public DamAxial As Double = 1.0             'NoDesign sections: Direct Analysis Method factors of EA and EI (composite columns, AISC 360-22 I1.5: 0.8 / 0.64);
+    Public DamFlexural As Double = 1.0          '1.0 = no reduction (the steel factors of the model do not apply to them)
+    Public Mpcc As Func(Of Double, Integer, Double)  'composite column: plastic moment at the axial compression (kN, plane 0 major / 1 minor) [kN m] (AISC 341-22 G3.4a)
+    Public Pyc As Double                        'composite column: axial yield strength [kN] (G3.4a exception Prc < 0.1 Pyc)
+    Public CompositeCheck As Func(Of Double, Double, Double, Double, Double)  'composite column: interaction ratio for (Pr compression kN, Mx, My kN m, length m) (PCR-5g corner check)
     Public Fillet As Double                     'fillet radius (k = tf + r)
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'property modifiers: area, As2, As3, torsion, I22, I33, mass, weight
     Public ReadOnly Property WeightPerLength As Double
@@ -106,6 +111,11 @@ Public Class FemModel
     Public Prefs As New DesignPrefs
     Public NonlinearCases As New List(Of String)     'static cases that ETABS solves as nonlinear (P-Delta when set)
     Public ModalCount As Integer
+    Public CompositeScwb As Boolean              'AISC 341-22 G3.4a (PCR-5b): composite columns (sections with Mpcc) take part in the SCWB ratios
+    Public ScwbBeamCode As Boolean               'beam side of steel joints by AISC 341-22 Eq. E3-3 instead of the ETABS fit (composite joints: G3.4a always)
+    Public CornerScwb As Boolean                 'AISC 341-22 E3.3 / G3.3 (PCR-5g): columns of two intersecting moment frames, both directions together
+    Public CornerGravity As New FemCombo         'gravity part of the D1.4a overstrength combination (1.2 D + 0.5 L + 0.2 SDS D: dead and live patterns)
+    Public Omega0 As Double                      'overstrength factor of the seismic force-resisting system
     Public AxialFactor As Double = 1.0           'stiffness reduction of the Direct Analysis Method applied by ETABS after a design run: EA
     Public FlexuralFactor As Double = 1.0        'and EI (0.8, tau-b = 1)
     Public Notes As New List(Of String)         'unsupported features, assumptions

@@ -157,6 +157,8 @@ Public Class FramePointStoryGroupStructures_
     Public Structure LoadCaseDisp_
         Public U1 As List(Of Double)
         Public U2 As List(Of Double)
+        Public W1 As List(Of Double)        'DriftLimits = split: displacements of the non-seismic (wind) cases; U1 / U2 then hold the seismic cases
+        Public W2 As List(Of Double)
     End Structure
 
 End Class
@@ -326,6 +328,8 @@ Public Class CostItem_
     Public FormworkCost As Double
     Public TotalCost As Double
     Public Share As Double                  'percent of the total cost
+    Public TubeKind As String = ""          'filled tubes: HSS / BuiltUp
+    Public SteelCostFactor As Double = 1.0  'unit cost of the steel of this row relative to the steel unit cost (tube steel, PCR-4)
 End Class
 
 'Model of a run, saved in the backup: a restarted run checks that it continues the same model

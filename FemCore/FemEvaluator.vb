@@ -90,8 +90,7 @@ Public Class FemEvaluator
                 Dim top As Integer = If(Model.Nodes(el.NI).Z > Model.Nodes(el.NJ).Z, el.NI, el.NJ)
                 If Not MomentAtNode.Contains(top) AndAlso ColumnAbove(top, ei) Then Continue For
             End If
-            Dim Ca As Double = Ev.Solver.PuAisc341(Ev.Members(ei)) / (0.9 * el.Section.Fy * el.Section.A)
-            Dim Bad As Boolean = Not SteelDesign.SeismicCompact(el.Section, High, Ca)
+            Dim Bad As Boolean = Not SteelDesign.SeismicCompactPr(el.Section, High, Ev.Solver.PuAisc341(Ev.Members(ei)))
             If Not isCol Then
                 Dim Lb As Double = If(el.UnbracedLTB > 0, el.UnbracedLTB, el.Length - el.OffsetI - el.OffsetJ)
                 Bad = Bad OrElse Not SteelDesign.LbRyOk(el.Section, Lb, High)
@@ -275,10 +274,13 @@ Public Class FemEvaluator
                                                                              End Sub)
             Next
             Ev.Members = Fem
+            Ev.Solver.CornerPr = Nothing
+            If Model.CornerScwb Then Ev.Solver.SetCornerAxial(Ev.StaticRes, Ev.RS)          'PCR-5g
             Ev.Solver.StrongColumnWeakBeam(Fem, Ev.BCMajor, Ev.BCMinor)
             'ETABS reports the beam/column ratio of a column only when its governing combination is a seismic one (response spectrum): 439 of 439
             'such columns have a value, 82 of 82 with another governing combination (gravity, wind) have none
-            If Model.RSCases.Count > 0 Then
+            'AISC 341-22 (PCR-5b): every joint is checked, as the provision requires; the ETABS behaviour is kept only for the earlier limits
+            If Model.RSCases.Count > 0 AndAlso Not SteelDesign.Aisc341_2022 Then
                 For ei = 0 To Model.Elements.Count - 1
                     Dim gc As String = Fem(ei).PMMCombo
                     Dim cmb = If(gc Is Nothing, Nothing, FindCombo(gc))
