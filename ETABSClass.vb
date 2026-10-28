@@ -204,6 +204,8 @@ Partial Public Class ETABS_Class
                 If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeHybrid") : Return ret : End If
             End If
         End If
+        ret = InitializeBoxCatalog()            'PCR-10 (CornerColumns = box)
+        If (ret <> 0) Then : Errorlogprint("Problem occurred on Function: InitializeBoxCatalog") : Return ret : End If
         '_____________________________________________________
         'Steel design code (set once)
         If SteelFrameDesignGroupIDs.Count > 0 Then
@@ -1456,6 +1458,7 @@ Partial Public Class ETABS_Class
             U = Math.Min(Math.Max(U, 0), N - 1)
             'steel W section
             SteelUb(i) = U : SteelLb(i) = If(SCWBActive AndAlso Not Groups(isec).IsColumn, 0, Math.Min(Math.Max(L, 0), U))        'a very large design ratio shifts both bounds up
+            If IsBoxGroup(isec) Then BoxBounds(isec, SecID, SteelUb(i), SteelLb(i))       'PCR-10: unfilled box catalog
             'composite (column groups of the composite modes)
             If FormInfo.CompositeColumns AndAlso Groups(isec).IsColumn Then
                 If TubeMode Then
@@ -1510,8 +1513,9 @@ Partial Public Class ETABS_Class
             Dim AllOpen As Boolean = True
             For i = 0 To SteelUb.Length - 1
                 Dim isec As Integer = SteelFrameDesignGroupIDs(i)
-                SteelUb(i) = Math.Min(N - 1, SteelUb(i) + StepW)
-                If SteelUb(i) < N - 1 Then AllOpen = False
+                Dim Ns As Integer = If(IsBoxGroup(isec), Boxes.Count, N)
+                SteelUb(i) = Math.Min(Ns - 1, SteelUb(i) + If(IsBoxGroup(isec), Math.Max(1, CInt(Math.Round(0.23 * (Ns - 1)))), StepW))
+                If SteelUb(i) < Ns - 1 Then AllOpen = False
                 If FormInfo.CompositeColumns AndAlso Groups(isec).IsColumn Then
                     If TubeMode Then
                         Dim Nt As Integer = Tubes.Count
@@ -1707,7 +1711,7 @@ Partial Public Class ETABS_Class
     Private Function IsDuctile(ByVal v As Integer, ByVal k As Integer) As Boolean
         If DuctilityLevel = "None" OrElse DuctileBeam Is Nothing Then Return True
         Dim ID As Integer = SteelFrameDesignGroupIDs(v)
-        If Groups(ID).IsComposite OrElse IsTubeVar(v) Then Return True
+        If Groups(ID).IsComposite OrElse IsTubeVar(v) OrElse IsBoxVar(v) Then Return True     'box catalog: own AISC 341 wall limit (PCR-10)
         If k < 0 OrElse k >= DuctileBeam.Length Then Return True
         Return If(Groups(ID).IsColumn, DuctileColumn(k), DuctileBeam(k))
     End Function
@@ -1717,7 +1721,10 @@ Partial Public Class ETABS_Class
     Private Sub InitializeDuctilityFilter()
         DuctilityLevel = "None" : DuctileBeam = Nothing : DuctileColumn = Nothing
         Dim Mode As String = If(ReadSetting("SeismicDuctilityFilter"), "auto").Trim().ToLowerInvariant()
-        If Mode = "off" OrElse (Mode <> "on" AndAlso Not SeismicChecksActive) Then Return
+        If Mode = "off" OrElse (Mode <> "on" AndAlso Not SeismicChecksActive) Then
+            If BeamPrequalification = "rbs" Then Errorlogprint("Warning: BeamPrequalification = rbs is not applied: the AISC 341 ductility filter is off")
+            Return
+        End If
         Dim FrameType As String = ""
         Try
             Dim Version, N As Integer, Fields() As String = Nothing, Data() As String = Nothing
@@ -1741,14 +1748,46 @@ Partial Public Class ETABS_Class
         'their real axial force; the filter uses Ca = 0 for the columns and the FEM check with the real Pr of every column (penalty) does the rest
         If FemCore.SteelDesign.Aisc341_2022 Then Ca = 0
         Dim High As Boolean = (DuctilityLevel = "High")
+        Dim Rbs As Boolean = (BeamPrequalification = "rbs")
+        Dim MaxBeamDepth As Double = Double.MaxValue, RbsText As String = ""
+        If Rbs Then
+            '5.3.1 (5) clear span / depth >= 7 (SMF) or 5 (IMF) as a sufficient condition for every joint of the model: shortest variable beam
+            'minus the largest outer dimension of the column catalogs (W, unfilled boxes, filled tubes)
+            Dim Ratio As Double = If(High, 7.0, 5.0)
+            Dim Spans = Frames.Where(Function(c) c.GroupName IsNot Nothing AndAlso VarIndex.ContainsKey(c.GroupName) AndAlso
+                                                 (c.FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.X OrElse c.FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.Y)).Select(Function(c) c.FrameLength).ToList()
+            Dim ColDepth As Double = WSections.Max(Function(s) s.Depth)
+            If Boxes IsNot Nothing AndAlso Boxes.Count > 0 Then ColDepth = Math.Max(ColDepth, Boxes.Max(Function(b) Math.Max(b.H, b.B)))
+            If FormInfo.CompositeColumns AndAlso Tubes IsNot Nothing AndAlso Tubes.Count > 0 Then ColDepth = Math.Max(ColDepth, Tubes.Max(Function(b) Math.Max(b.H, b.B)))
+            If Spans.Count > 0 Then MaxBeamDepth = (Spans.Min() - ColDepth) / Ratio
+            RbsText = " (with the RBS beam limits of AISC 358-22 5.3.1: W1100, 610 kg/m, tf 53 mm, d <= (" & Spans.DefaultIfEmpty(0).Min().ToString("0", CultureInfo.InvariantCulture) &
+                      " - " & ColDepth.ToString("0", CultureInfo.InvariantCulture) & ") / " & Ratio & " = " & MaxBeamDepth.ToString("0.#", CultureInfo.InvariantCulture) & " mm)"
+        End If
         ReDim DuctileBeam(WSections.Count - 1) : ReDim DuctileColumn(WSections.Count - 1)
         For i = 0 To WSections.Count - 1
-            DuctileBeam(i) = MeetsDuctility(WSections(i), High, 0)
+            DuctileBeam(i) = MeetsDuctility(WSections(i), High, 0) AndAlso (Not Rbs OrElse (MeetsRbsBeamLimits(WSections(i)) AndAlso WSections(i).Depth <= MaxBeamDepth))
             DuctileColumn(i) = MeetsDuctility(WSections(i), High, Ca)
         Next
-        Errorlogprint("Info: AISC 341 ductility filter (" & FrameType & ", " & DuctilityLevel & " ductility): " & DuctileBeam.Count(Function(b) b) & " of " & WSections.Count & " sections for beams, " &
+        Errorlogprint("Info: AISC 341 ductility filter (" & FrameType & ", " & DuctilityLevel & " ductility): " & DuctileBeam.Count(Function(b) b) & " of " & WSections.Count & " sections for beams" &
+                      RbsText & ", " &
                       DuctileColumn.Count(Function(b) b) & " for columns (Ca " & Ca.ToString("0.##", CultureInfo.InvariantCulture) & "); other sections are replaced by the nearest compliant one before every analysis")
     End Sub
+
+    'PCR-12: beam limitations of the prequalified RBS connection, AISC 358-22 5.3.1 (2) to (4): depth up to W44 (W1100), weight up to 610 kg/m
+    '(nominal mass of the label), flange thickness up to 53 mm; (5) clear span / depth in InitializeDuctilityFilter (model geometry).
+    'App.config BeamPrequalification = none (default) | rbs; it acts through the ductility filter (SMF / IMF models).
+    Friend ReadOnly BeamPrequalification As String = SettingChoice("BeamPrequalification", "none", {"none", "rbs"})
+
+    Private Shared Function MeetsRbsBeamLimits(ByVal S As SectionStructures_.STEEL_I_SECTION) As Boolean
+        Dim Name As String = If(S.SectionName, "").ToUpperInvariant()
+        Dim x As Integer = Name.IndexOf("X"c)
+        Dim Series, Mass As Double
+        If Not (Name.StartsWith("W") AndAlso x > 1 AndAlso Double.TryParse(Name.Substring(1, x - 1), NumberStyles.Float, CultureInfo.InvariantCulture, Series) AndAlso
+                Double.TryParse(Name.Substring(x + 1), NumberStyles.Float, CultureInfo.InvariantCulture, Mass)) Then
+            Series = S.Depth : Mass = S.Area * 0.00785       'not a metric W label: actual depth and mass (library in mm, steel 7850 kg/m3)
+        End If
+        Return Series <= 1100 AndAlso Mass <= 610 AndAlso S.FlangeThickness <= 53.0
+    End Function
 
     'Variables that hold a section that is not seismically compact move to the nearest compliant section (within the bounds, else anywhere)
     Private Sub E1_Modifier_Ductility(ByVal Sect_Ind() As Integer)
@@ -1833,11 +1872,19 @@ Partial Public Class ETABS_Class
             ret = EnsureCompositeSections(Needed)
             If (ret <> 0) Then Return ret
         End If
+        If Boxes IsNot Nothing Then
+            Dim BoxIds As New List(Of Integer)
+            For v = 0 To SteelFrameDesignGroupIDs.Count - 1
+                If IsBoxVar(v) Then BoxIds.Add(Sect_Ind(v))
+            Next
+            ret = EnsureBoxSections(BoxIds)
+            If (ret <> 0) Then Return ret
+        End If
         If AssignedComp Is Nothing OrElse AssignedComp.Length <> SteelFrameDesignGroupIDs.Count Then ReDim AssignedComp(SteelFrameDesignGroupIDs.Count - 1)
         For i = 0 To SteelFrameDesignGroupIDs.Count - 1
             Dim isec As Integer = SteelFrameDesignGroupIDs(i)
             If Assigned(i) = Sect_Ind(i) AndAlso (Not Hybrid OrElse AssignedComp(i) = Groups(isec).IsComposite) Then Continue For
-            Dim PropName As String = If(IsTubeVar(i), Nothing, WSections(Sect_Ind(i)).SectionName)
+            Dim PropName As String = If(IsTubeVar(i), Nothing, If(IsBoxVar(i), BoxSectionName(Sect_Ind(i)), WSections(Sect_Ind(i)).SectionName))
             If CompositeActive AndAlso Groups(isec).IsComposite Then PropName = CompositeSectionName(Sect_Ind(i))
             ret = SapModel.FrameObj.SetSection(Groups(isec).GroupName, PropName, ETABSv1.eItemType.Group)
             If (ret <> 0) Then : Errorlogprint("Problem occurred on :FrameObj.SetSection " & PropName) : Return ret : End If
@@ -2443,6 +2490,9 @@ Partial Public Class ETABS_Class
                 Dim T As TubeSection_ = Tubes(Sect_Ind(i))
                 StructureWeight += G.GroupLength * T.SteelArea * A992Fy50Weight * TubeCostFactor(T)
                 ConcreteVolume += G.GroupLength * T.ConcreteArea * 0.000000001        'mm³ -> m³
+            ElseIf IsBoxVar(i) Then
+                Dim T As TubeSection_ = Boxes(Sect_Ind(i))                            'PCR-10: unfilled box, tube steel price
+                StructureWeight += G.GroupLength * T.SteelArea * A992Fy50Weight * TubeCostFactor(T)
             ElseIf FormInfo.CompositeColumns AndAlso G.IsComposite Then
                 Dim S As EncasedIShape = Encased(Sect_Ind(i))
                 StructureWeight += G.GroupLength * S.SteelArea * A992Fy50Weight
@@ -2482,6 +2532,12 @@ Partial Public Class ETABS_Class
                 x.SteelCostFactor = TubeCostFactor(Tb)
                 x.SteelWeight_kN = G.GroupLength * Tb.SteelArea * A992Fy50Weight
                 x.Concrete_m3 = G.GroupLength * Tb.ConcreteArea * 0.000000001
+            ElseIf IsBoxVar(i) Then
+                Dim Bx As TubeSection_ = Boxes(Sect_Ind(i))
+                x.Kind = "Steel box"
+                x.TubeKind = If(Bx.BuiltUp, "BuiltUp", "HSS")
+                x.SteelCostFactor = TubeCostFactor(Bx)
+                x.SteelWeight_kN = G.GroupLength * Bx.SteelArea * A992Fy50Weight
             ElseIf FormInfo.CompositeColumns AndAlso G.IsComposite Then
                 Dim S As EncasedIShape = Encased(Sect_Ind(i))
                 x.Kind = "Composite"
@@ -2535,6 +2591,7 @@ Partial Public Class ETABS_Class
     'Printable design variable: "W360X110" or "W360X110 [EC 500x450 8D20]"
     Public Function DescribeVariable(ByVal v As Integer, ByVal SecID As Integer) As String
         If IsTubeVar(v) Then Return Tubes(SecID).Name & " [" & Tubes(SecID).Describe() & "]"
+        If IsBoxVar(v) Then Return DescribeBox(SecID)
         Dim txt As String = WSections(SecID).SectionName
         If FormInfo.CompositeColumns AndAlso Groups(SteelFrameDesignGroupIDs(v)).IsComposite Then
             Dim S As EncasedIShape = Encased(SecID)
@@ -2728,31 +2785,44 @@ Partial Public Class ETABS_Class
     End Function
 
     Public Function CatalogCount(ByVal v As Integer) As Integer
+        If IsBoxVar(v) Then Return Boxes.Count
         Return If(IsTubeVar(v), Tubes.Count, WSections.Count)
+    End Function
+
+    'Tube or box section k of variable v (Nothing: W section)
+    Private Function TubeOf(ByVal v As Integer, ByVal k As Integer) As TubeSection_
+        If IsTubeVar(v) Then Return Tubes(k)
+        If IsBoxVar(v) Then Return Boxes(k)
+        Return Nothing
     End Function
 
     'Steel area and overall depth of section k of variable v (geometric constraints, ACO heuristic)
     Public Function SecArea(ByVal v As Integer, ByVal k As Integer) As Double
-        Return If(IsTubeVar(v), Tubes(k).SteelArea, WSections(k).Area)
+        Dim T As TubeSection_ = TubeOf(v, k)
+        Return If(T IsNot Nothing, T.SteelArea, WSections(k).Area)
     End Function
 
     Public Function SecDepth(ByVal v As Integer, ByVal k As Integer) As Double
-        Return If(IsTubeVar(v), Tubes(k).H, WSections(k).Depth)
+        Dim T As TubeSection_ = TubeOf(v, k)
+        Return If(T IsNot Nothing, T.H, WSections(k).Depth)
     End Function
 
     Public Function SecName(ByVal v As Integer, ByVal k As Integer) As String
-        Return If(IsTubeVar(v), Tubes(k).Name, WSections(k).SectionName)
+        Dim T As TubeSection_ = TubeOf(v, k)
+        Return If(T IsNot Nothing, T.Name, WSections(k).SectionName)
     End Function
 
     'Index of a section name in the catalog of variable v (-1: not found)
     Public Function FindSection(ByVal v As Integer, ByVal Name As String) As Integer
         If IsTubeVar(v) Then Return Tubes.FindIndex(Function(c) c.Name = Name)
+        If IsBoxVar(v) Then Return Boxes.FindIndex(Function(c) c.Name = Name OrElse BOX_PREFIX & c.Name = Name)
         Return WSections.FindIndex(Function(c) c.SectionName = Name)
     End Function
 
-    'Width available for the beam flange: W column (web: clear depth, flange: flange width), tube: width of the face
+    'Width available for the beam flange: W column (web: clear depth, flange: flange width), tube or box: width of the face
     Private Function ColumnGap(ByVal v As Integer, ByVal k As Integer, ByVal ConType As String) As Double
-        If IsTubeVar(v) Then Return If(ConType = "Depth", Tubes(k).H, Tubes(k).B)
+        Dim T As TubeSection_ = TubeOf(v, k)
+        If T IsNot Nothing Then Return If(ConType = "Depth", T.H, T.B)
         Return ConnectionGap(WSections(k), ConType)
     End Function
 

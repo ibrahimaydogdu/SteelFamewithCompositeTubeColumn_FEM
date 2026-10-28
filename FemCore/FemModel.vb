@@ -28,6 +28,10 @@ Public Class FemSection
     Public Pyc As Double                        'composite column: axial yield strength [kN] (G3.4a exception Prc < 0.1 Pyc)
     Public CompositeCheck As Func(Of Double, Double, Double, Double, Double)  'composite column: interaction ratio for (Pr compression kN, Mx, My kN m, length m) (PCR-5g corner check)
     Public Fillet As Double                     'fillet radius (k = tf + r)
+    'PCR-10: unfilled box (square / rectangular HSS or built-up box): Depth = H (walls parallel to axis 2), Width = B, FlangeThickness =
+    'WebThickness = wall thickness; flat width of a wall = outer dimension - BoxCornerT x t (HSS 3, built-up 2; AISC 360-22 B4.1b(d))
+    Public IsBox As Boolean
+    Public BoxCornerT As Double = 3.0
     Public Modifier() As Double = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}      'property modifiers: area, As2, As3, torsion, I22, I33, mass, weight
     Public ReadOnly Property WeightPerLength As Double
         Get
@@ -116,6 +120,11 @@ Public Class FemModel
     Public CornerScwb As Boolean                 'AISC 341-22 E3.3 / G3.3 (PCR-5g): columns of two intersecting moment frames, both directions together
     Public CornerGravity As New FemCombo         'gravity part of the D1.4a overstrength combination (1.2 D + 0.5 L + 0.2 SDS D: dead and live patterns)
     Public Omega0 As Double                      'overstrength factor of the seismic force-resisting system
+    'PCR-11 options of the corner check (defaults = PCR-5g)
+    Public CornerRbs As Boolean                  'beam side: reduced beam section of AISC 358-22 5.7 (c = 0.25 bbf) with Mpr of Eq. 2.4-1 instead of the full section
+    Public CornerOrtho As Double = 1.0           'orthogonal factor of the overstrength axial load: 1.0 = 100 % + 100 %, 0.3 = ASCE 7-22 12.5.1.2(a) 100 % + 30 %
+    Public CornerRoofExempt As Boolean           'AISC 341-22 E3.4a exception (a)(1) at the roof corner joints (as in the storey check)
+    Public RbsGravity As New FemCombo            'Vgravity of AISC 358-22 Eq. 2.4-3: 1.2 D + 0.5 L (dead and live patterns of CornerGravity)
     Public AxialFactor As Double = 1.0           'stiffness reduction of the Direct Analysis Method applied by ETABS after a design run: EA
     Public FlexuralFactor As Double = 1.0        'and EI (0.8, tau-b = 1)
     Public Notes As New List(Of String)         'unsupported features, assumptions

@@ -19,6 +19,11 @@ Partial Public Class ETABS_Class
     Friend ReadOnly InteriorColumnsSteel As Boolean = (SettingChoice("InteriorColumnsSteel", "false", {"false", "true"}) = "true")
     'calibrated: beam side of the SCWB ratio from the closed form fitted to ETABS (0f2f0be) | code: AISC 341-22 Eq. E3-3 / G3.4a
     Friend ReadOnly ScwbBeamSide As String = SettingChoice("ScwbBeamSide", "calibrated", {"calibrated", "code"})
+    'PCR-11, corner check of PCR-5g: CornerBeamSide full (beam side of the joint ratios) | rbs (AISC 358-22 5.7 reduced beam section);
+    'CornerOrthogonal 100 (100 % + 100 %) | 30 (ASCE 7-22 12.5.1.2(a)); CornerRoofExemption false | true (AISC 341-22 E3.4a (a)(1))
+    Friend ReadOnly CornerBeamSide As String = SettingChoice("CornerBeamSide", "full", {"full", "rbs"})
+    Friend ReadOnly CornerOrthogonal As String = SettingChoice("CornerOrthogonal", "100", {"100", "30"})
+    Friend ReadOnly CornerRoofExemption As Boolean = (SettingChoice("CornerRoofExemption", "false", {"false", "true"}) = "true")
 
     Friend ReadOnly Property Is2022 As Boolean
         Get
@@ -235,7 +240,10 @@ Partial Public Class ETABS_Class
         Next
         If C.Terms.Count = 0 Then Why = "no dead or live pattern" : Return False
         If PrefSds <= 0 Then Why = "SDS of the design preferences missing" : Return False
-        Errorlogprint("Info: AISC 341-22 corner check (E3.3 / G3.3): Pr = " & String.Join(" + ", Txt) & " + Omega0 " & PrefOmega0.ToString("0.##", CultureInfo.InvariantCulture) & " (|RSx| + |RSy|)")
+        Errorlogprint("Info: AISC 341-22 corner check (E3.3 / G3.3): Pr = " & String.Join(" + ", Txt) & " + Omega0 " & PrefOmega0.ToString("0.##", CultureInfo.InvariantCulture) &
+                      If(CornerOrthogonal = "30", " max(|RSx| + 0.3 |RSy|, 0.3 |RSx| + |RSy|)", " (|RSx| + |RSy|)") &
+                      "; beam side " & If(CornerBeamSide = "rbs", "RBS (AISC 358-22 5.7, c 0.25 bbf)", "full section") &
+                      "; roof exception " & CornerRoofExemption.ToString().ToLowerInvariant())
         Return True
     End Function
 
@@ -252,6 +260,6 @@ Partial Public Class ETABS_Class
         SteelDesign.Aisc341_2022 = Is2022           'FEM checks (FemCore) and the ductility filter (PCR-5c, 5e)
         Errorlogprint("Info: AISC 341 options: edition " & Aisc341Edition & ", SCWB " & SeismicScwbMode & ", composite DAM reduction " & CompositeDamReduction.ToString().ToLowerInvariant() &
                       ", final protocol " & FinalProtocol & ", tube ductility " & TubeDuctilityMode & ", interior columns steel " & InteriorColumnsSteel.ToString().ToLowerInvariant() &
-                      ", SCWB beam side " & ScwbBeamSide)
+                      ", SCWB beam side " & ScwbBeamSide & ", corner columns " & CornerColumnsMode)
     End Sub
 End Class

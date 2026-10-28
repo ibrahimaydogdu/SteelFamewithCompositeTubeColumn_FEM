@@ -237,14 +237,14 @@ Partial Public Class ETABS_Class
     'Catalog size and steel area of section s of design variable d (ACO heuristic), independent of the current types
     Public Function FullVarCount(ByVal d As Integer) As Integer
         If Not Hybrid OrElse AltVar Is Nothing Then Return CatalogCount(d)
-        If d < NG Then Return If(GMode(d) = GroupColumnType_.Composite, CompCount(), WSections.Count)
+        If d < NG Then Return If(GMode(d) = GroupColumnType_.Composite, CompCount(), If(IsBoxGroup(SteelFrameDesignGroupIDs(d)), Boxes.Count, WSections.Count))
         If AltVar.Contains(d) Then Return CompCount()
         Return Ub(d) + 1
     End Function
 
     Public Function FullVarArea(ByVal d As Integer, ByVal s As Integer) As Double
         If Not Hybrid OrElse AltVar Is Nothing Then Return SecArea(d, s)
-        If d < NG Then Return If(GMode(d) = GroupColumnType_.Composite, CompArea(s), WSections(s).Area)
+        If d < NG Then Return If(GMode(d) = GroupColumnType_.Composite, CompArea(s), If(IsBoxGroup(SteelFrameDesignGroupIDs(d)), Boxes(s).SteelArea, WSections(s).Area))
         If AltVar.Contains(d) Then Return CompArea(s)
         Return 1
     End Function
@@ -259,11 +259,12 @@ Partial Public Class ETABS_Class
 
     'Column-column ratio (> 1: violated). Same catalog: max(area, depth ratio) (as before stage 6); W column on a tube:
     'W depth / tube H, W flange / tube B (the W column stands on the tube); tube on a W column: tube H / W depth, B / flange
+    'PCR-10: unfilled boxes count as tubes (box on a filled tube of a hybrid corner stack: same rule as tube on tube)
     Private Function CtoCRatio(ByVal UpVar As Integer, ByVal UpK As Integer, ByVal DownVar As Integer, ByVal DownK As Integer) As Double
-        Dim UT As Boolean = IsTubeVar(UpVar), DT As Boolean = IsTubeVar(DownVar)
-        If UT = DT Then Return Math.Max(Math.Max(SecArea(UpVar, UpK) / SecArea(DownVar, DownK), SecDepth(UpVar, UpK) / SecDepth(DownVar, DownK)), 1)
-        If DT Then Return Math.Max(Math.Max(WSections(UpK).Depth / Tubes(DownK).H, WSections(UpK).FlangeLength / Tubes(DownK).B), 1)
-        Return Math.Max(Math.Max(Tubes(UpK).H / WSections(DownK).Depth, Tubes(UpK).B / WSections(DownK).FlangeLength), 1)
+        Dim UT As TubeSection_ = TubeOf(UpVar, UpK), DT As TubeSection_ = TubeOf(DownVar, DownK)
+        If (UT Is Nothing) = (DT Is Nothing) Then Return Math.Max(Math.Max(SecArea(UpVar, UpK) / SecArea(DownVar, DownK), SecDepth(UpVar, UpK) / SecDepth(DownVar, DownK)), 1)
+        If DT IsNot Nothing Then Return Math.Max(Math.Max(WSections(UpK).Depth / DT.H, WSections(UpK).FlangeLength / DT.B), 1)
+        Return Math.Max(Math.Max(UT.H / WSections(DownK).Depth, UT.B / WSections(DownK).FlangeLength), 1)
     End Function
 
     '_______________________________________________________________________________________________

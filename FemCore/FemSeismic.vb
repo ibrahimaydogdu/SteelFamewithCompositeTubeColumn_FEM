@@ -52,9 +52,9 @@ Partial Public Class FemStatic
             Dim AnyComp As Boolean = Comp(col) OrElse (HasAbove AndAlso Comp(ab))
             Dim Cols() As Integer = If(HasAbove, {ci, above}, {ci})
             'moment connected beams at the top joint, per plane
-            Dim BeamSum(1) As Double, BeamCount(1) As Integer, BeamDir(1) As Integer
+            Dim BeamSum(1) As Double, BeamCount(1) As Integer, BeamDir(1) As Integer, BeamSumRbs(1) As Double
             For plane = 0 To 1                                   '0 = major (axis 2 of the column in the plane), 1 = minor
-                Dim sumB As Double = 0, nB As Integer = 0
+                Dim sumB As Double = 0, nB As Integer = 0, sumR As Double = 0
                 For Each bi In Attached(top)
                     Dim b = M.Elements(bi)
                     If IsCol(b) Then Continue For
@@ -79,9 +79,10 @@ Partial Public Class FemStatic
                     Else
                         sumB += ScwbC0 * b.Section.Fy * b.Section.Z33 * (1 + ScwbC1 * off / b.Length)
                     End If
+                    If M.CornerRbs Then sumR += RbsProjected(b, off, If(CornerVg IsNot Nothing, CornerVg(bi), 0.0))
                     nB += 1
                 Next
-                BeamSum(plane) = sumB : BeamCount(plane) = nB
+                BeamSum(plane) = sumB : BeamCount(plane) = nB : BeamSumRbs(plane) = sumR
             Next
             'column side of the joint per plane (E3-2 / G3.4a Mpcc), Pr of the design combinations
             Dim SumC(1) As Double
@@ -103,7 +104,8 @@ Partial Public Class FemStatic
             Dim Corner As Boolean = M.CornerScwb AndAlso CornerPr IsNot Nothing AndAlso BeamCount(0) > 0 AndAlso BeamCount(1) > 0
             If M.CornerScwb AndAlso CornerPr IsNot Nothing Then
                 Joints.Add(New ScwbJoint With {.Col = ci, .Above = If(HasAbove, above, -1), .Node = top, .Corner = Corner,
-                                               .BeamSum = BeamSum, .BeamCount = BeamCount, .Dir = BeamDir, .SumC = SumC})
+                                               .BeamSum = BeamSum, .BeamCount = BeamCount, .Dir = BeamDir, .SumC = SumC,
+                                               .CornerBeamSum = If(M.CornerRbs, BeamSumRbs, BeamSum)})
                 If Corner Then Continue For
             End If
             If Not HasAbove Then Continue For                                     'roof joints: no joint ratio (storey check above)
@@ -120,9 +122,28 @@ Partial Public Class FemStatic
     Private Class ScwbJoint
         Public Col, Above, Node As Integer
         Public Corner As Boolean
-        Public BeamSum(), SumC() As Double
+        Public BeamSum(), SumC(), CornerBeamSum() As Double
         Public BeamCount(), Dir() As Integer
     End Class
+
+    'PCR-11 (M.CornerRbs): beam strength of the corner check at the column centreline with the RBS of AISC 358-22 5.7: Eq. 5.7-1 to 5.7-3
+    'a = 0.625 bbf, b = 0.75 d (middle of the ranges), c = 0.25 bbf; ZRBS = Zb - 2 c tbf (d - tbf) (Eq. 5.7-4); Mpr = Cpr Ry Fy ZRBS (2.4.3);
+    'hinge at Sh = a + b / 2 (Eq. 5.7-5); Vh = 2 Mpr / Lh' + Vgravity (Eq. 2.4-3, same sign; Lh' = clear span - 2 Sh, Vgravity = Vg: end
+    'shear of the beam under 1.2 D + 0.5 L); moment projected to the column centreline over Sh + end offset
+    Public Shared Function RbsProjected(ByVal b As FemElement, ByVal off As Double, ByVal Vg As Double) As Double
+        Dim S = b.Section
+        Dim Fy As Double = S.Fy
+        Dim Cpr As Double = If(Fy > 0 AndAlso S.Fu > 0, Math.Min((Fy + S.Fu) / (2 * Fy), 1.2), 1.2)
+        Dim Ze As Double = S.Z33
+        Dim Sh As Double = 0
+        If S.Width > 0 AndAlso S.FlangeThickness > 0 AndAlso S.Depth > 0 Then
+            Ze = S.Z33 - 2 * 0.25 * S.Width * S.FlangeThickness * (S.Depth - S.FlangeThickness)
+            Sh = 0.625 * S.Width + 0.375 * S.Depth
+        End If
+        Dim Mpr As Double = Cpr * SteelDesign.RyAisc * Fy * Ze
+        Dim Lh As Double = Math.Max(b.Length - b.OffsetI - b.OffsetJ - 2 * Sh, 0.001)
+        Return Mpr + (2 * Mpr / Lh + Vg) * (off + Sh)
+    End Function
 
     'PCR-5g, AISC 341-22 Commentary E3.3 case (b), conservative alternate. (1) Storey check of every frame line at every floor:
     'sum of the projected beam strengths of all moment connected beams of the line (corner joints included) <= sum of the column strengths
@@ -160,13 +181,14 @@ Partial Public Class FemStatic
             Next
         Next
         For Each jt In J.Where(Function(x) x.Corner)
+            If M.CornerRoofExempt AndAlso jt.Above < 0 AndAlso Exempt(jt.Col) Then Continue For            'PCR-11: E3.4a(a)(1) / G3.4a exception
             Dim Segs() As Integer = If(jt.Above >= 0, {jt.Col, jt.Above}, {jt.Col})
             Dim Len = Function(e As Integer) Math.Max(M.Elements(e).Length, 0.001)
             Dim Kx As Double = Segs.Sum(Function(e) M.Elements(e).Section.I33 / Len(e)), Ky As Double = Segs.Sum(Function(e) M.Elements(e).Section.I22 / Len(e))
             For Each s In Segs
                 Dim E = M.Elements(s)
-                Dim Mx As Double = jt.BeamSum(0) * If(Kx > 0, E.Section.I33 / Len(s) / Kx, 1.0 / Segs.Length)
-                Dim My As Double = jt.BeamSum(1) * If(Ky > 0, E.Section.I22 / Len(s) / Ky, 1.0 / Segs.Length)
+                Dim Mx As Double = jt.CornerBeamSum(0) * If(Kx > 0, E.Section.I33 / Len(s) / Kx, 1.0 / Segs.Length)
+                Dim My As Double = jt.CornerBeamSum(1) * If(Ky > 0, E.Section.I22 / Len(s) / Ky, 1.0 / Segs.Length)
                 Dim Pr As Double = CornerPr(s)
                 Dim R As Double
                 If Comp(E) Then
@@ -183,16 +205,38 @@ Partial Public Class FemStatic
     End Sub
 
     'PCR-5g: required axial compression of every column for the corner check, AISC 341-22 D1.4a with the overstrength seismic load of both
-    'directions: P(CornerGravity) + Omega0 (|P_RSx| + |P_RSy|), largest over the stations (compression positive). Set before StrongColumnWeakBeam.
+    'directions: P(CornerGravity) + Omega0 (|P_RSx| + |P_RSy|) (PCR-11 CornerOrtho 0.3: Omega0 max(|P_RSx| + 0.3 |P_RSy|, 0.3 |P_RSx| + |P_RSy|)),
+    'largest over the stations (compression positive). Set before StrongColumnWeakBeam.
     Public CornerPr() As Double
+
+    'PCR-11: seismic axial force magnitudes of the two directions combined: max(Qx + f Qy, f Qx + Qy) (f 1.0: 100 % + 100 %, 0.3: 100 % + 30 %)
+    Public Shared Function OrthogonalSum(ByVal Qx As Double, ByVal Qy As Double, ByVal f As Double) As Double
+        Return Math.Max(Qx + f * Qy, f * Qx + Qy)
+    End Function
+
+    'PCR-11 (M.CornerRbs): Vgravity of AISC 358-22 Eq. 2.4-3 of every beam, largest |V2| at the ends of the clear span under M.RbsGravity
+    Public CornerVg() As Double
 
     Public Sub SetCornerAxial(ByVal R As StaticResults, ByVal RS As Dictionary(Of String, RSResults))
         Dim ne As Integer = M.Elements.Count
-        Dim Out(ne - 1) As Double
+        Dim Out(ne - 1) As Double, Vg(ne - 1) As Double
         System.Threading.Tasks.Parallel.For(0, ne, FemProfile.Options, Sub(ei)
-                                                                          If Math.Abs(M.Elements(ei).Axes(0, 2)) <= 0.9 Then Return
+                                                                          If Math.Abs(M.Elements(ei).Axes(0, 2)) <= 0.9 Then
+                                                                              If Not M.CornerRbs Then Return
+                                                                              Dim xb() As Double = StationLocations(ei)
+                                                                              Dim V0 As Double = 0, V1 As Double = 0
+                                                                              For Each t In M.RbsGravity.Terms
+                                                                                  Dim pat As Integer = M.PatternIndex(t.Name)
+                                                                                  If pat < 0 Then Continue For
+                                                                                  Dim sp = StationForces(R, pat, ei, xb)
+                                                                                  V0 += t.Factor * sp(0)(1) : V1 += t.Factor * sp(xb.Length - 1)(1)
+                                                                              Next
+                                                                              Vg(ei) = Math.Max(Math.Abs(V0), Math.Abs(V1))
+                                                                              Return
+                                                                          End If
                                                                           Dim xs() As Double = StationLocations(ei)
-                                                                          Dim N(xs.Length - 1) As Double, Q(xs.Length - 1) As Double
+                                                                          Dim N(xs.Length - 1) As Double, Q(xs.Length - 1) As Double, Qd(1)() As Double
+                                                                          Qd(0) = New Double(xs.Length - 1) {} : Qd(1) = New Double(xs.Length - 1) {}
                                                                           For Each t In M.CornerGravity.Terms
                                                                               Dim pat As Integer = M.PatternIndex(t.Name)
                                                                               If pat < 0 Then Continue For
@@ -203,13 +247,17 @@ Partial Public Class FemStatic
                                                                               Dim rr As RSResults = Nothing
                                                                               If RS Is Nothing OrElse Not RS.TryGetValue(rc.Name, rr) Then Continue For
                                                                               Dim sp = RSStationForces(rr, ei, xs)
-                                                                              For j = 0 To xs.Length - 1 : Q(j) += Math.Abs(sp(j)(0)) : Next
+                                                                              For j = 0 To xs.Length - 1 : Qd(rc.Direction)(j) += Math.Abs(sp(j)(0)) : Next
+                                                                          Next
+                                                                          For j = 0 To xs.Length - 1
+                                                                              Q(j) = OrthogonalSum(Qd(0)(j), Qd(1)(j), M.CornerOrtho)
                                                                           Next
                                                                           Dim Pmax As Double = 0
                                                                           For j = 0 To xs.Length - 1 : Pmax = Math.Max(Pmax, -N(j) + M.Omega0 * Q(j)) : Next
                                                                           Out(ei) = Pmax
                                                                       End Sub)
         CornerPr = Out
+        CornerVg = Vg
     End Sub
 
 End Class

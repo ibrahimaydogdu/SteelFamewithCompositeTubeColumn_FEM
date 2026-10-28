@@ -55,6 +55,34 @@ Public Class TubeSection_
         Return New FilledBox(H, B, t, Mat) With {.Name = Name}
     End Function
 
+    'PCR-10: steel properties of the unfilled box (mm; sharp corners, wall thickness t, as ETABS computes them for a Tube section):
+    'major axis 3 (depth H along axis 2), minor axis 2. J: Bredt formula of the thin-walled closed section.
+    Public ReadOnly Property I33 As Double
+        Get
+            Return (B * H ^ 3 - (B - 2 * t) * (H - 2 * t) ^ 3) / 12
+        End Get
+    End Property
+    Public ReadOnly Property I22 As Double
+        Get
+            Return (H * B ^ 3 - (H - 2 * t) * (B - 2 * t) ^ 3) / 12
+        End Get
+    End Property
+    Public ReadOnly Property Z33 As Double
+        Get
+            Return (B * H ^ 2 - (B - 2 * t) * (H - 2 * t) ^ 2) / 4
+        End Get
+    End Property
+    Public ReadOnly Property Z22 As Double
+        Get
+            Return (H * B ^ 2 - (H - 2 * t) * (B - 2 * t) ^ 2) / 4
+        End Get
+    End Property
+    Public ReadOnly Property TorsionJ As Double
+        Get
+            Return 2 * t * (B - t) ^ 2 * (H - t) ^ 2 / ((B - t) + (H - t))
+        End Get
+    End Property
+
     'Printable size, e.g. "CFT 559x559x23.6" / "CFP 711x25.4"
     Public Function Describe() As String
         Dim F = Function(x As Double) x.ToString("0.#", CultureInfo.InvariantCulture)
@@ -130,8 +158,67 @@ Public Class TubeSettings_
     'Library sections (mm) and built-up boxes; sections beyond lambda_max (compression or flexure) are removed.
     'Mat: Fy and Es of the column steel for the classification.
     Public Function Catalog(ByVal LibraryFile As String, ByVal Mat As CompositeMaterial_, ByRef Log As String) As List(Of TubeSection_)
-        Dim L As New List(Of TubeSection_)
         Dim NLib As Integer = 0, NBu As Integer = 0, NSlender As Integer = 0, NSeismic As Integer = 0
+        Dim L As List(Of TubeSection_) = Candidates(LibraryFile, NLib, NBu)
+        'smallest dimension, positive thickness, lambda_max (I1.1a / I1.1b)
+        Dim Before As Integer = L.Count
+        L = L.Where(Function(s) s.t > 0 AndAlso Math.Min(s.H, s.B) >= MinDimension - 0.001 AndAlso s.t < Math.Min(s.H, s.B) / 2).ToList()
+        Dim Kept As New List(Of TubeSection_)
+        For Each s In L
+            Dim C As CompositeSection = s.Build(Mat)
+            If C.Classify(False) = CompositeClass_.TooSlender OrElse C.Classify(True) = CompositeClass_.TooSlender Then NSlender += 1 : Continue For
+            If SeismicSlenderness(s) > SeismicLimit(s.Shape, Mat) Then NSeismic += 1 : Continue For
+            Kept.Add(s)
+        Next
+        Kept = Distinct(Kept)
+        Log = "tube catalog: " & Kept.Count & " sections (library " & NLib & ", built-up " & NBu & "; removed: " &
+              (Before - L.Count) & " below " & MinDimension & " mm, " & NSlender & " beyond lambda_max, " & NSeismic & " beyond the " &
+              SeismicDuctility.ToString().ToLowerInvariant() & " ductility limit (" &
+              If(Edition2022, "AISC 341-22 Table D1.1b case 17, Ry " & Ry.ToString("0.###", CultureInfo.InvariantCulture), "TBDY 2018 Table 9.3") & "), duplicates merged)"
+        Return Kept
+    End Function
+
+    'one section per geometry (library and built-up may coincide), sorted by steel area
+    Private Shared Function Distinct(ByVal L As List(Of TubeSection_)) As List(Of TubeSection_)
+        Return L.GroupBy(Function(s) s.Shape & "|" & Math.Round(s.H, 1) & "|" & Math.Round(s.B, 1) & "|" & Math.Round(s.t, 2)).
+                 Select(Function(g) g.OrderBy(Function(s) If(s.BuiltUp, 1, 0)).First()).
+                 OrderBy(Function(s) s.SteelArea).ThenBy(Function(s) s.H).ToList()
+    End Function
+
+    'PCR-10: unfilled square boxes of the same sources (library HSS and built-up boxes, same sizes and plate thicknesses) for the corner columns
+    'of the steel mode: walls compact for flexure (AISC 360-22 Table B4.1b case 17 flanges 1.12, case 19 webs 2.42 sqrt(E / Fy)), nonslender for
+    'compression (Table B4.1a case 6, 1.40 sqrt(E / Fy)) and within the AISC 341 limit WallLimit (b / t, Double.MaxValue: none). Pipes and
+    'rectangular boxes are not used. BuiltUpOnly: library HSS removed; MaxWidth > 0: outer width / depth limit [mm] (AISC 358-22 5.3.2(3): RBS
+    'connections to built-up box columns up to 24 in. = 600 mm, also in orthogonal moment frames)
+    Public Function BoxCatalog(ByVal LibraryFile As String, ByVal Fy As Double, ByVal Es As Double, ByVal WallLimit As Double, ByVal LimitText As String,
+                               ByVal BuiltUpOnly As Boolean, ByVal MaxWidth As Double, ByRef Log As String) As List(Of TubeSection_)
+        Dim NLib As Integer = 0, NBu As Integer = 0
+        Dim L As List(Of TubeSection_) = Candidates(LibraryFile, NLib, NBu).
+            Where(Function(s) s.Shape = TubeShape_.Box AndAlso Math.Abs(s.H - s.B) < 0.5).ToList()
+        Dim NConn As Integer = L.Count
+        L = L.Where(Function(s) (s.BuiltUp OrElse Not BuiltUpOnly) AndAlso (MaxWidth <= 0 OrElse Math.Max(s.H, s.B) <= MaxWidth + 0.001)).ToList()
+        NConn -= L.Count
+        Dim Before As Integer = L.Count
+        L = L.Where(Function(s) s.t > 0 AndAlso Math.Min(s.H, s.B) >= MinDimension - 0.001 AndAlso s.t < Math.Min(s.H, s.B) / 2).ToList()
+        Dim Root As Double = Math.Sqrt(Es / Fy)
+        Dim NCompact As Integer = 0, NSeismic As Integer = 0
+        Dim Kept As New List(Of TubeSection_)
+        For Each s In L
+            Dim lam As Double = SeismicSlenderness(s)
+            If lam > 1.12 * Root Then NCompact += 1 : Continue For          'square: the flange limit governs (webs 2.42, compression 1.40)
+            If lam > WallLimit Then NSeismic += 1 : Continue For
+            Kept.Add(s)
+        Next
+        Kept = Distinct(Kept)
+        Log = "unfilled box catalog: " & Kept.Count & " square sections (library " & NLib & ", built-up " & NBu & "; removed: " & NConn & " by the connection limits (" &
+              If(BuiltUpOnly, "built-up only", "HSS and built-up") & If(MaxWidth > 0, ", width <= " & MaxWidth.ToString("0.#", CultureInfo.InvariantCulture) & " mm", "") & "), " & (Before - L.Count) & " below " &
+              MinDimension & " mm, " & NCompact & " not compact (AISC 360-22 Table B4.1b), " & NSeismic & " beyond " & LimitText & ", duplicates merged)"
+        Return Kept
+    End Function
+
+    'Library boxes / pipes and built-up boxes of the settings (no filter)
+    Private Function Candidates(ByVal LibraryFile As String, ByRef NLib As Integer, ByRef NBu As Integer) As List(Of TubeSection_)
+        Dim L As New List(Of TubeSection_)
         If Not String.IsNullOrWhiteSpace(LibraryFile) AndAlso IO.File.Exists(LibraryFile) Then
             Dim doc As XDocument = XDocument.Load(LibraryFile)
             Dim ns As XNamespace = doc.Root.Name.Namespace
@@ -173,24 +260,6 @@ Public Class TubeSettings_
                 Bv += BuiltUpStep
             End While
         End If
-        'smallest dimension, positive thickness, lambda_max (I1.1a / I1.1b)
-        Dim Before As Integer = L.Count
-        L = L.Where(Function(s) s.t > 0 AndAlso Math.Min(s.H, s.B) >= MinDimension - 0.001 AndAlso s.t < Math.Min(s.H, s.B) / 2).ToList()
-        Dim Kept As New List(Of TubeSection_)
-        For Each s In L
-            Dim C As CompositeSection = s.Build(Mat)
-            If C.Classify(False) = CompositeClass_.TooSlender OrElse C.Classify(True) = CompositeClass_.TooSlender Then NSlender += 1 : Continue For
-            If SeismicSlenderness(s) > SeismicLimit(s.Shape, Mat) Then NSeismic += 1 : Continue For
-            Kept.Add(s)
-        Next
-        'one section per geometry (library and built-up may coincide), sorted by steel area
-        Kept = Kept.GroupBy(Function(s) s.Shape & "|" & Math.Round(s.H, 1) & "|" & Math.Round(s.B, 1) & "|" & Math.Round(s.t, 2)).
-                    Select(Function(g) g.OrderBy(Function(s) If(s.BuiltUp, 1, 0)).First()).
-                    OrderBy(Function(s) s.SteelArea).ThenBy(Function(s) s.H).ToList()
-        Log = "tube catalog: " & Kept.Count & " sections (library " & NLib & ", built-up " & NBu & "; removed: " &
-              (Before - L.Count) & " below " & MinDimension & " mm, " & NSlender & " beyond lambda_max, " & NSeismic & " beyond the " &
-              SeismicDuctility.ToString().ToLowerInvariant() & " ductility limit (" &
-              If(Edition2022, "AISC 341-22 Table D1.1b case 17, Ry " & Ry.ToString("0.###", CultureInfo.InvariantCulture), "TBDY 2018 Table 9.3") & "), duplicates merged)"
-        Return Kept
+        Return L
     End Function
 End Class

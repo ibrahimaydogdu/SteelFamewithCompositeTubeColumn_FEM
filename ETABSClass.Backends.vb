@@ -67,7 +67,13 @@ Partial Public Class ETABS_Class
             Dim Cur As Integer = Sect_Ind(v)
             Dim First As Integer = Math.Min(Cur + Math.Max(Steps(v), 1), GUb(v))
             For k = First To GUb(v)
-                If WSections(k).Imajor >= WSections(Cur).Imajor AndAlso WSections(k).PlasticModulusMajor >= WSections(Cur).PlasticModulusMajor AndAlso GeometryFits(v, k, Sect_Ind) AndAlso IsDuctile(v, k) Then Sect_Ind(v) = k : Exit For
+                Dim Stronger As Boolean
+                If IsBoxVar(v) Then
+                    Stronger = Boxes(k).I33 >= Boxes(Cur).I33 AndAlso Boxes(k).Z33 >= Boxes(Cur).Z33        'PCR-10
+                Else
+                    Stronger = WSections(k).Imajor >= WSections(Cur).Imajor AndAlso WSections(k).PlasticModulusMajor >= WSections(Cur).PlasticModulusMajor
+                End If
+                If Stronger AndAlso GeometryFits(v, k, Sect_Ind) AndAlso IsDuctile(v, k) Then Sect_Ind(v) = k : Exit For
             Next
         Next
         E1_Modifier_Geometric(Sect_Ind)
@@ -318,6 +324,13 @@ Partial Public Class ETABS_Class
                         Reason = "AISC 341-22 corner check: " & If(Why, "Omega0 of the design preferences missing") : Return Nothing
                     End If
                     M.CornerScwb = True : M.Omega0 = Owner.PrefOmega0
+                    M.CornerRbs = Owner.CornerBeamSide = "rbs"                                       'PCR-11
+                    M.CornerOrtho = If(Owner.CornerOrthogonal = "30", 0.3, 1.0)
+                    M.CornerRoofExempt = Owner.CornerRoofExemption
+                    'AISC 358-22 2.4.4 Vgravity: 1.2 D + 0.5 L (CornerGravity: live 0.5, dead 1.2 + 0.2 SDS)
+                    For Each Term In M.CornerGravity.Terms
+                        M.RbsGravity.Terms.Add(New FemCore.FemTerm With {.Name = Term.Name, .Factor = If(Term.Factor = 0.5, 0.5, 1.2)})
+                    Next
                 End If
                 'harmless notes: sections that are assigned from the catalog later, diaphragms defined by shell objects (the joints carry the diaphragm), modal cases
                 Dim Notes = M.Notes.Where(Function(n) Not n.StartsWith("section ") AndAlso Not n.StartsWith("diaphragm from shell objects") AndAlso Not n.EndsWith(" is Modal (not static)")).ToList()
@@ -348,6 +361,23 @@ Partial Public Class ETABS_Class
                 .Z22 = C.PlasticModulusMinor / 1.0E+9, .Z33 = C.PlasticModulusMajor / 1.0E+9,
                 .R22 = C.RadiusofGyrationMinor / 1000, .R33 = C.RadiusofGyrationMajor / 1000, .Fillet = Math.Max(C.KDES - C.FlangeThickness, 0) / 1000}
             Sections(Index) = S
+            Return S
+        End Function
+
+        'PCR-10: FemSection of an unfilled box (steel design of FemCore; sharp corners like the ETABS Tube section, wall thickness t;
+        'flat width of the walls B - 3 t for library HSS, B - 2 t for built-up boxes)
+        Private ReadOnly BoxSections As New Dictionary(Of Integer, FemSection)
+        Private Function BoxSectionOf(ByVal Index As Integer) As FemSection
+            Dim S As FemSection = Nothing
+            If BoxSections.TryGetValue(Index, S) Then Return S
+            Dim B As TubeSection_ = O.Boxes(Index)
+            S = New FemSection With {.Name = O.BoxSectionName(Index), .MaterialName = Template.MaterialName, .E = Template.E, .G = Template.G,
+                .UnitWeight = Template.UnitWeight, .UnitMass = Template.UnitMass, .Fy = Template.Fy, .Fu = Template.Fu, .IsBox = True, .BoxCornerT = If(B.BuiltUp, 2.0, 3.0),
+                .Depth = B.H / 1000, .Width = B.B / 1000, .FlangeThickness = B.t / 1000, .WebThickness = B.t / 1000,
+                .A = B.SteelArea / 1000000, .As2 = 2 * B.t * B.H / 1000000, .As3 = 2 * B.t * B.B / 1000000, .J = B.TorsionJ / 1.0E+12,
+                .I22 = B.I22 / 1.0E+12, .I33 = B.I33 / 1.0E+12, .S22 = 2 * B.I22 / B.B / 1.0E+9, .S33 = 2 * B.I33 / B.H / 1.0E+9,
+                .Z22 = B.Z22 / 1.0E+9, .Z33 = B.Z33 / 1.0E+9, .R22 = Math.Sqrt(B.I22 / B.SteelArea) / 1000, .R33 = Math.Sqrt(B.I33 / B.SteelArea) / 1000}
+            BoxSections(Index) = S
             Return S
         End Function
 
@@ -425,7 +455,8 @@ Partial Public Class ETABS_Class
                 For i = 0 To O.SteelFrameDesignGroupIDs.Count - 1
                     Dim ID As Integer = O.SteelFrameDesignGroupIDs(i)
                     Dim G As String = O.Groups(ID).GroupName
-                    Fem.AssignSection(GroupElements(G), If(O.CompositeActive AndAlso O.Groups(ID).IsComposite, CompositeSectionOf(Sect_Ind(i)), SectionOf(Sect_Ind(i))))
+                    Fem.AssignSection(GroupElements(G), If(O.CompositeActive AndAlso O.Groups(ID).IsComposite, CompositeSectionOf(Sect_Ind(i)),
+                                                           If(O.IsBoxVar(i), BoxSectionOf(Sect_Ind(i)), SectionOf(Sect_Ind(i)))))
                 Next
                 O.FemVector = CType(Sect_Ind.Clone(), Integer())
                 O.Iter += 1

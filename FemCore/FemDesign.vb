@@ -33,6 +33,7 @@ Public Module SteelDesign
     '_______________________________________________________________________________________________
     'Compression (E3, E7) for the given effective lengths about both axes (K = 1 in the Direct Analysis Method)
     Public Function CompressionStrength(ByVal S As FemSection, ByVal LMajor As Double, ByVal LMinor As Double) As Double
+        If S.IsBox Then Return BoxCompression(S, LMajor, LMinor)
         Dim E As Double = S.E, Fy As Double = S.Fy
         Dim Root As Double = Math.Sqrt(E / Fy)
         Dim lamF As Double = S.Width / (2 * S.FlangeThickness)
@@ -71,6 +72,7 @@ Public Module SteelDesign
     '_______________________________________________________________________________________________
     'Major axis flexure (F2, F3): lateral-torsional buckling for the unbraced length Lb and the moment gradient factor Cb
     Public Function MajorFlexure(ByVal S As FemSection, ByVal Lb As Double, ByVal Cb As Double) As Double
+        If S.IsBox Then Return BoxFlexure(S, True)
         Dim E As Double = S.E, Fy As Double = S.Fy
         Dim Root As Double = Math.Sqrt(E / Fy)
         Dim Mp As Double = Fy * S.Z33
@@ -110,6 +112,7 @@ Public Module SteelDesign
 
     'Minor axis flexure (F6)
     Public Function MinorFlexure(ByVal S As FemSection) As Double
+        If S.IsBox Then Return BoxFlexure(S, False)
         Dim E As Double = S.E, Fy As Double = S.Fy
         Dim Root As Double = Math.Sqrt(E / Fy)
         Dim lamF As Double = S.Width / (2 * S.FlangeThickness)
@@ -121,6 +124,10 @@ Public Module SteelDesign
 
     'Shear: major axis (web, G2.1) and minor axis (flanges, G6); returns nominal strength and phi
     Public Sub Shear(ByVal S As FemSection, ByRef Vn2 As Double, ByRef Phi2 As Double, ByRef Vn3 As Double, ByRef Phi3 As Double)
+        If S.IsBox Then
+            Vn2 = BoxShear(S, True) : Vn3 = BoxShear(S, False) : Phi2 = 0.9 : Phi3 = 0.9
+            Return
+        End If
         Dim E As Double = S.E, Fy As Double = S.Fy
         Dim h As Double = WebHeight(S), tw As Double = S.WebThickness
         Dim lam As Double = h / tw
@@ -166,6 +173,95 @@ Public Module SteelDesign
 
 
     '_______________________________________________________________________________________________
+    'PCR-10: unfilled box members (AISC 360-22 E3 / E7, F7, G4). Walls of width B (flanges for the major axis) and depth H (webs);
+    'b / t with the flat width of IsBox sections. The box catalog of the host only holds walls that are compact for flexure and nonslender
+    'for compression (the AISC 341 limits are stricter), so the slender branches of flexure are a conservative fallback that is not reached.
+    Public Function BoxWallRatio(ByVal S As FemSection, ByVal WidthWalls As Boolean) As Double
+        Dim Outer As Double = If(WidthWalls, S.Width, S.Depth)
+        Return (Outer - S.BoxCornerT * S.FlangeThickness) / S.FlangeThickness
+    End Function
+
+    'E3 with Q = 1, E7 effective widths of the slender walls (Table E7.1 case (b), walls of square and rectangular HSS: c1 0.20, c2 1.38)
+    Private Function BoxCompression(ByVal S As FemSection, ByVal LMajor As Double, ByVal LMinor As Double) As Double
+        Dim E As Double = S.E, Fy As Double = S.Fy
+        Dim Root As Double = Math.Sqrt(E / Fy)
+        Dim KLr As Double = Math.Max(LMajor / S.R33, LMinor / S.R22)
+        Dim Fe As Double = Math.PI * Math.PI * E / (KLr * KLr)
+        Dim Fcr As Double = If(KLr <= 4.71 * Root, Math.Pow(0.658, Fy / Fe) * Fy, 0.877 * Fe)
+        Dim LamR As Double = 1.4 * Root
+        Dim Ae As Double = S.A
+        For Each W In {True, False}
+            Dim lam As Double = BoxWallRatio(S, W)
+            If lam <= LamR * Math.Sqrt(Fy / Fcr) Then Continue For
+            Dim b As Double = lam * S.FlangeThickness
+            Dim Fel As Double = (1.38 * LamR / lam) ^ 2 * Fy
+            Dim be As Double = b * (1 - 0.2 * Math.Sqrt(Fel / Fcr)) * Math.Sqrt(Fel / Fcr)
+            Ae -= 2 * (b - Math.Max(be, 0)) * S.FlangeThickness
+        Next
+        Return Fcr * Ae
+    End Function
+
+    'F7.1 yielding, F7.2 flange local buckling (Eq. F7-2), F7.3 web local buckling (Eq. F7-5); no lateral-torsional buckling (square and
+    'near-square boxes, F7.4 does not govern). Major: flanges = width walls, Z33 / S33; minor: the walls swap, Z22 / S22
+    Private Function BoxFlexure(ByVal S As FemSection, ByVal Major As Boolean) As Double
+        Dim E As Double = S.E, Fy As Double = S.Fy
+        Dim Root As Double = Math.Sqrt(E / Fy)
+        Dim Z As Double = If(Major, S.Z33, S.Z22), Se As Double = If(Major, S.S33, S.S22)
+        Dim Mp As Double = Fy * Z
+        Dim Mn As Double = Mp
+        Dim lf As Double = BoxWallRatio(S, Major), lw As Double = BoxWallRatio(S, Not Major)
+        If lf > 1.12 * Root Then
+            If lf <= 1.4 * Root Then
+                Mn = Math.Min(Mn, Mp - (Mp - Fy * Se) * (3.57 * lf / Root - 4.0))
+            Else
+                Mn = Math.Min(Mn, Fy * Se * 1.4 * Root / lf)
+            End If
+        End If
+        If lw > 2.42 * Root Then
+            If lw <= 5.7 * Root Then
+                Mn = Math.Min(Mn, Mp - (Mp - Fy * Se) * (0.305 * lw / Root - 0.738))
+            Else
+                Mn = Math.Min(Mn, Fy * Se * 5.7 * Root / lw)
+            End If
+        End If
+        Return Math.Min(Mn, Mp)
+    End Function
+
+    'G4: Vn = 0.6 Fy Aw Cv2, Aw = 2 h t (h: flat width of the walls parallel to the shear), kv = 5 (G2.2); major shear (V2) is carried by the
+    'depth walls
+    Private Function BoxShear(ByVal S As FemSection, ByVal Major As Boolean) As Double
+        Dim E As Double = S.E, Fy As Double = S.Fy, t As Double = S.FlangeThickness
+        Dim lam As Double = BoxWallRatio(S, Not Major)
+        Dim kv As Double = 5.0
+        Dim l1 As Double = 1.1 * Math.Sqrt(kv * E / Fy), l2 As Double = 1.37 * Math.Sqrt(kv * E / Fy)
+        Dim Cv2 As Double = If(lam <= l1, 1.0, If(lam <= l2, l1 / lam, 1.51 * kv * E / (lam * lam * Fy)))
+        Return 0.6 * Fy * 2 * lam * t * t * Cv2
+    End Function
+
+    'PCR-10: AISC 341-22 Table D1.1b for box and rectangular HSS members (both editions of the program: the box option is new). Every wall is a
+    'flange for one of the bending axes of a column: case 12 b / t <= 0.55 (highly ductile) / 1.00 (moderately ductile) sqrt(E / Ry Fy); webs
+    'case 13 h / t <= 2.45 (1 - 1.04 Ca) / 3.76 (1 - 3.05 Ca) sqrt(E / Ry Fy) for Ca <= 0.113, else 2.26 (1 - 0.38 Ca) / 2.61 (1 - 0.49 Ca),
+    'at least 1.56 sqrt(E / Ry Fy); Ca = Pr / (Ry Fy Ag) (LRFD), 0 for tension. Flat widths of BoxWallRatio, design wall thickness.
+    Public Function BoxSeismicLimits(ByVal High As Boolean, ByVal Ca As Double, ByRef Flange As Double, ByRef Web As Double) As Boolean
+        Dim c As Double = Math.Max(Ca, 0.0)
+        Flange = If(High, 0.55, 1.0)
+        If c <= 0.113 Then
+            Web = If(High, 2.45 * (1 - 1.04 * c), 3.76 * (1 - 3.05 * c))
+        Else
+            Web = Math.Max(If(High, 2.26 * (1 - 0.38 * c), 2.61 * (1 - 0.49 * c)), 1.56)
+        End If
+        Return True
+    End Function
+
+    Public Function BoxSeismicCompact(ByVal S As FemSection, ByVal High As Boolean, ByVal Ca As Double) As Boolean
+        Dim Root As Double = Math.Sqrt(S.E / (RyAisc * S.Fy))
+        Dim Fl, Wb As Double
+        BoxSeismicLimits(High, Ca, Fl, Wb)
+        Dim Lim As Double = Math.Min(Fl, Wb) * Root
+        Return BoxWallRatio(S, True) <= Lim AndAlso BoxWallRatio(S, False) <= Lim
+    End Function
+
+    '_______________________________________________________________________________________________
     'AISC 341 (Table D1.1) seismic compactness of a rolled I section: flanges bf / 2tf <= 0.32 (High) or 0.40 (Moderate) sqrt(E / Ry Fy);
     'web h / tw limit with Ca = Pu / (phi Py)
     Public Const RyAisc As Double = 1.1
@@ -207,6 +303,7 @@ Public Module SteelDesign
 
     'Seismic compactness of a member with the required axial strength Pr (compression, kN with the units of S): AISC 341-22 or the earlier limits
     Public Function SeismicCompactPr(ByVal S As FemSection, ByVal High As Boolean, ByVal Pr As Double) As Boolean
+        If S.IsBox Then Return BoxSeismicCompact(S, High, Pr / (RyAisc * S.Fy * S.A))
         If Not Aisc341_2022 Then Return SeismicCompact(S, High, Pr / (0.9 * S.Fy * S.A))
         Return Compact2022(S.Width / (2 * S.FlangeThickness), WebHeight(S) / S.WebThickness, S.E, S.Fy, High, Pr / (RyAisc * S.Fy * S.A))
     End Function
