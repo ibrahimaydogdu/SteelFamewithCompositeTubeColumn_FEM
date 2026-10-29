@@ -1722,7 +1722,7 @@ Partial Public Class ETABS_Class
         DuctilityLevel = "None" : DuctileBeam = Nothing : DuctileColumn = Nothing
         Dim Mode As String = If(ReadSetting("SeismicDuctilityFilter"), "auto").Trim().ToLowerInvariant()
         If Mode = "off" OrElse (Mode <> "on" AndAlso Not SeismicChecksActive) Then
-            If BeamPrequalification = "rbs" Then Errorlogprint("Warning: BeamPrequalification = rbs is not applied: the AISC 341 ductility filter is off")
+            If BeamPrequalification = "rbs" OrElse ColumnPrequalification = "rbs" Then Errorlogprint("Warning: BeamPrequalification / ColumnPrequalification = rbs is not applied: the AISC 341 ductility filter is off")
             Return
         End If
         Dim FrameType As String = ""
@@ -1749,29 +1749,49 @@ Partial Public Class ETABS_Class
         If FemCore.SteelDesign.Aisc341_2022 Then Ca = 0
         Dim High As Boolean = (DuctilityLevel = "High")
         Dim Rbs As Boolean = (BeamPrequalification = "rbs")
+        Dim RbsColumn As Boolean = (ColumnPrequalification = "rbs")
+        ReDim DuctileBeam(WSections.Count - 1) : ReDim DuctileColumn(WSections.Count - 1)
+        For i = 0 To WSections.Count - 1
+            DuctileColumn(i) = MeetsDuctility(WSections(i), High, Ca) AndAlso (Not RbsColumn OrElse WSeries(WSections(i)) <= 1000)
+        Next
         Dim MaxBeamDepth As Double = Double.MaxValue, RbsText As String = ""
         If Rbs Then
             '5.3.1 (5) clear span / depth >= 7 (SMF) or 5 (IMF) as a sufficient condition for every joint of the model: shortest variable beam
-            'minus the largest outer dimension of the column catalogs (W, unfilled boxes, filled tubes)
+            'minus the largest outer dimension of the column catalogs (W sections allowed for columns, unfilled boxes, filled tubes)
             Dim Ratio As Double = If(High, 7.0, 5.0)
             Dim Spans = Frames.Where(Function(c) c.GroupName IsNot Nothing AndAlso VarIndex.ContainsKey(c.GroupName) AndAlso
                                                  (c.FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.X OrElse c.FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.Y)).Select(Function(c) c.FrameLength).ToList()
-            Dim ColDepth As Double = WSections.Max(Function(s) s.Depth)
+            Dim ColDepth As Double = Enumerable.Range(0, WSections.Count).Where(Function(i) DuctileColumn(i)).Select(Function(i) WSections(i).Depth).DefaultIfEmpty(0).Max()
             If Boxes IsNot Nothing AndAlso Boxes.Count > 0 Then ColDepth = Math.Max(ColDepth, Boxes.Max(Function(b) Math.Max(b.H, b.B)))
             If FormInfo.CompositeColumns AndAlso Tubes IsNot Nothing AndAlso Tubes.Count > 0 Then ColDepth = Math.Max(ColDepth, Tubes.Max(Function(b) Math.Max(b.H, b.B)))
             If Spans.Count > 0 Then MaxBeamDepth = (Spans.Min() - ColDepth) / Ratio
             RbsText = " (with the RBS beam limits of AISC 358-22 5.3.1: W1100, 610 kg/m, tf 53 mm, d <= (" & Spans.DefaultIfEmpty(0).Min().ToString("0", CultureInfo.InvariantCulture) &
                       " - " & ColDepth.ToString("0", CultureInfo.InvariantCulture) & ") / " & Ratio & " = " & MaxBeamDepth.ToString("0.#", CultureInfo.InvariantCulture) & " mm)"
         End If
-        ReDim DuctileBeam(WSections.Count - 1) : ReDim DuctileColumn(WSections.Count - 1)
         For i = 0 To WSections.Count - 1
             DuctileBeam(i) = MeetsDuctility(WSections(i), High, 0) AndAlso (Not Rbs OrElse (MeetsRbsBeamLimits(WSections(i)) AndAlso WSections(i).Depth <= MaxBeamDepth))
-            DuctileColumn(i) = MeetsDuctility(WSections(i), High, Ca)
         Next
         Errorlogprint("Info: AISC 341 ductility filter (" & FrameType & ", " & DuctilityLevel & " ductility): " & DuctileBeam.Count(Function(b) b) & " of " & WSections.Count & " sections for beams" &
                       RbsText & ", " &
-                      DuctileColumn.Count(Function(b) b) & " for columns (Ca " & Ca.ToString("0.##", CultureInfo.InvariantCulture) & "); other sections are replaced by the nearest compliant one before every analysis")
+                      DuctileColumn.Count(Function(b) b) & " for columns (Ca " & Ca.ToString("0.##", CultureInfo.InvariantCulture) & If(RbsColumn, ", RBS column limit of AISC 358-22 5.3.2(3): W1000", "") &
+                      "); other sections are replaced by the nearest compliant one before every analysis")
     End Sub
+
+    'PCR-13: rolled column depth of the prequalified RBS connection, AISC 358-22 5.3.2(3): W40 (W1000) maximum, for every W column group.
+    'App.config ColumnPrequalification = none (default) | rbs; it acts through the ductility filter (SMF / IMF models). The width of the
+    'built-up boxes (unfilled: CornerBoxMaxWidth; filled: TubeSections.xml BuiltUpMax) is set in the catalogs.
+    Friend ReadOnly ColumnPrequalification As String = SettingChoice("ColumnPrequalification", "none", {"none", "rbs"})
+
+    'Nominal depth series of a W label (W1000X494 -> 1000) and its nominal mass [kg/m]; other labels: actual depth and mass (library in mm)
+    Private Shared Function WSeries(ByVal S As SectionStructures_.STEEL_I_SECTION, Optional ByRef Mass As Double = 0) As Double
+        Dim Name As String = If(S.SectionName, "").ToUpperInvariant()
+        Dim x As Integer = Name.IndexOf("X"c)
+        Dim Series As Double
+        If Name.StartsWith("W") AndAlso x > 1 AndAlso Double.TryParse(Name.Substring(1, x - 1), NumberStyles.Float, CultureInfo.InvariantCulture, Series) AndAlso
+           Double.TryParse(Name.Substring(x + 1), NumberStyles.Float, CultureInfo.InvariantCulture, Mass) Then Return Series
+        Mass = S.Area * 0.00785       'steel 7850 kg/m3
+        Return S.Depth
+    End Function
 
     'PCR-12: beam limitations of the prequalified RBS connection, AISC 358-22 5.3.1 (2) to (4): depth up to W44 (W1100), weight up to 610 kg/m
     '(nominal mass of the label), flange thickness up to 53 mm; (5) clear span / depth in InitializeDuctilityFilter (model geometry).
@@ -1779,13 +1799,8 @@ Partial Public Class ETABS_Class
     Friend ReadOnly BeamPrequalification As String = SettingChoice("BeamPrequalification", "none", {"none", "rbs"})
 
     Private Shared Function MeetsRbsBeamLimits(ByVal S As SectionStructures_.STEEL_I_SECTION) As Boolean
-        Dim Name As String = If(S.SectionName, "").ToUpperInvariant()
-        Dim x As Integer = Name.IndexOf("X"c)
-        Dim Series, Mass As Double
-        If Not (Name.StartsWith("W") AndAlso x > 1 AndAlso Double.TryParse(Name.Substring(1, x - 1), NumberStyles.Float, CultureInfo.InvariantCulture, Series) AndAlso
-                Double.TryParse(Name.Substring(x + 1), NumberStyles.Float, CultureInfo.InvariantCulture, Mass)) Then
-            Series = S.Depth : Mass = S.Area * 0.00785       'not a metric W label: actual depth and mass (library in mm, steel 7850 kg/m3)
-        End If
+        Dim Mass As Double
+        Dim Series As Double = WSeries(S, Mass)
         Return Series <= 1100 AndAlso Mass <= 610 AndAlso S.FlangeThickness <= 53.0
     End Function
 
@@ -2150,10 +2165,20 @@ Partial Public Class ETABS_Class
         Return ret
     End Function
 
-    'Design variable indices of the column groups on a story
+    'Design variable indices of the column groups on a story that the drift repair steps up
     Private Function StoryColumnVars(ByVal StoryID As Integer) As IEnumerable(Of Integer)
         Return Stories(StoryID).StoryFrames.Where(Function(c) c.FrameDirc = FramePointStoryGroupStructures_.FrameDirc_.Z _
-                    AndAlso c.GroupName IsNot Nothing AndAlso VarIndex.ContainsKey(c.GroupName)).Select(Function(c) VarIndex(c.GroupName)).Distinct()
+                    AndAlso c.GroupName IsNot Nothing AndAlso VarIndex.ContainsKey(c.GroupName) AndAlso Not DriftRepairExcluded(c.GroupName)).Select(Function(c) VarIndex(c.GroupName)).Distinct()
+    End Function
+
+    'PCR-14: App.config DriftRepairExclude = group name prefixes (comma / semicolon separated, default empty = every column group) of columns
+    'that the drift repair does not step up, e.g. the gravity columns of a perimeter frame (pinned base and beams: no lateral stiffness). The
+    'drift repair only enlarges and the repaired vector goes back to the population, so enlarged gravity columns accumulate (T2022e diagnostic)
+    Private ReadOnly DriftRepairExclude As String() = If(ReadSetting("DriftRepairExclude"), "").Split({","c, ";"c}, StringSplitOptions.RemoveEmptyEntries).
+                                                      Select(Function(p) p.Trim()).Where(Function(p) p.Length > 0).ToArray()
+
+    Private Function DriftRepairExcluded(ByVal GroupName As String) As Boolean
+        Return DriftRepairExclude.Any(Function(p) GroupName.StartsWith(p, StringComparison.OrdinalIgnoreCase))
     End Function
 
     'Final ETABS guard: composite groups failing the ETABS composite design move to the next larger section (by area,
