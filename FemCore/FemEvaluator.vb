@@ -18,6 +18,9 @@ End Class
 Public Class FemEvaluator
     Public ReadOnly Model As FemModel
     Public MassPDelta As Boolean = True             'ETABS preset "Non-iterative Based on Mass" for the linear cases
+    'PCR-15: modal analysis with the sparse (lumped) reduced mass matrix instead of the dense one (same equations, faster); default from the
+    'environment variable FemModalMass = sparse (FemTool), the optimizer sets it from App.config
+    Public SparseModalMass As Boolean = String.Equals(Environment.GetEnvironmentVariable("FemModalMass"), "sparse", StringComparison.OrdinalIgnoreCase)
     Public ReadOnly Timing As New Dictionary(Of String, Stopwatch)
     Private ReadOnly GroupElements As New Dictionary(Of String, List(Of Integer))
 
@@ -123,12 +126,17 @@ Public Class FemEvaluator
         Try
             Dim S As New FemStatic(Model)
             If MassPDelta Then S.UseMassPDelta()
+            S.SparseModalMass = SparseModalMass
             R.Solver = S
             R.StaticRes = S.Solve()
             If R.StaticRes.Failed Then R.Failed = True : R.Message = R.StaticRes.Message : Return R
             If Model.RSCases.Count > 0 Then
+                Dim wMd = FemProfile.Watch("modal.eigen") : wMd.Start()
                 Dim Md = S.ModalSolve(Model.ModalCount)
+                wMd.Stop()
+                Dim wRs = FemProfile.Watch("modal.rs") : wRs.Start()
                 For Each rc In Model.RSCases : R.RS(rc.Name) = S.ResponseSpectrum(Md, rc) : Next
+                wRs.Stop()
             End If
         Catch ex As Exception
             R.Failed = True : R.Message = ex.Message

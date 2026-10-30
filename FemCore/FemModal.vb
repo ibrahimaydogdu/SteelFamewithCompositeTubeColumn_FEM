@@ -47,6 +47,8 @@ Partial Public Class FemStatic
 
     Private ChainK() As ChainResult
     Private MassFull() As Double                                'lumped translational masses, 6 per node (only 0..2 used)
+    Public SparseModalMass As Boolean                           'PCR-15: reduced mass matrix in sparse rows (default: dense, earlier versions)
+    Private MassCols()() As Integer, MassVals()() As Double     'sparse reduced mass matrix: columns and values of every row
 
     'Assemble and factorise the reduced stiffness matrix (no loads); Solve does it for the load cases and keeps the factor
     Private Sub AssembleStiffness()
@@ -83,8 +85,10 @@ Partial Public Class FemStatic
 
     'K^-1 B for the columns of B
     Private Function SolveColumns(ByVal B As Matrix(Of Double)) As Matrix(Of Double)
+        Dim w = FemProfile.Watch("modal.solvecolumns") : w.Start()
         Dim Y = Matrix(Of Double).Build.Dense(B.RowCount, B.ColumnCount)
         For k = 0 To B.ColumnCount - 1 : Y.SetColumn(k, KFactor.Solve(B.Column(k).ToArray())) : Next
+        w.Stop()
         Return Y
     End Function
 
@@ -161,6 +165,47 @@ Partial Public Class FemStatic
         Return Mr
     End Function
 
+    'Reduced mass matrix M_red = T' M T in sparse rows (MassCols, MassVals); returns the diagonal
+    Private Function ReducedMassSparse() As Double()
+        Dim Rows(NFree - 1) As SortedDictionary(Of Integer, Double)
+        For dof = 0 To M.Nodes.Count * 6 - 1
+            Dim m1 As Double = MassFull(dof)
+            If m1 = 0 OrElse MapIdx(dof).Length = 0 Then Continue For
+            For a = 0 To MapIdx(dof).Length - 1
+                Dim i As Integer = MapIdx(dof)(a)
+                If Rows(i) Is Nothing Then Rows(i) = New SortedDictionary(Of Integer, Double)
+                For b = 0 To MapIdx(dof).Length - 1
+                    Dim j As Integer = MapIdx(dof)(b), v As Double = 0
+                    Rows(i).TryGetValue(j, v)
+                    Rows(i)(j) = v + MapCoef(dof)(a) * MapCoef(dof)(b) * m1
+                Next
+            Next
+        Next
+        ReDim MassCols(NFree - 1) : ReDim MassVals(NFree - 1)
+        Dim Diag(NFree - 1) As Double
+        For i = 0 To NFree - 1
+            If Rows(i) Is Nothing Then MassCols(i) = New Integer() {} : MassVals(i) = New Double() {} : Continue For
+            MassCols(i) = Rows(i).Keys.ToArray() : MassVals(i) = Rows(i).Values.ToArray()
+            Rows(i).TryGetValue(i, Diag(i))
+        Next
+        Return Diag
+    End Function
+
+    'M_red X with the sparse rows
+    Private Function SparseMassTimes(ByVal X As Matrix(Of Double)) As Matrix(Of Double)
+        Dim n As Integer = X.RowCount, p As Integer = X.ColumnCount
+        Dim xv() As Double = X.ToColumnMajorArray()
+        Dim yv(n * p - 1) As Double
+        Parallel.For(0, n, FemProfile.Options, Sub(i)
+                                                   Dim cols = MassCols(i), vals = MassVals(i)
+                                                   For t = 0 To cols.Length - 1
+                                                       Dim j As Integer = cols(t), v As Double = vals(t)
+                                                       For k = 0 To p - 1 : yv(k * n + i) += v * xv(k * n + j) : Next
+                                                   Next
+                                               End Sub)
+        Return Matrix(Of Double).Build.DenseOfColumnMajor(n, p, yv)
+    End Function
+
     'Reduced influence vector of a global translation direction (0 X, 1 Y, 2 Z): T q = unit translation of every node
     Private Function InfluenceVector(ByVal Direction As Integer) As Double()
         Dim r(NFree - 1) As Double
@@ -180,11 +225,19 @@ Partial Public Class FemStatic
     Public Function ModalSolve(ByVal nModes As Integer) As ModalResults
         If KFactor Is Nothing Then AssembleStiffness()
         ComputeMasses()
-        Dim Mr = ReducedMass()
         Dim n As Integer = NFree
-        Dim Mm = Matrix(Of Double).Build.DenseOfArray(Mr)
+        Dim Mm As Matrix(Of Double) = Nothing
+        Dim MDiag(n - 1) As Double
+        If SparseModalMass Then
+            MDiag = ReducedMassSparse()
+        Else
+            Dim Mr = ReducedMass()
+            Mm = Matrix(Of Double).Build.DenseOfArray(Mr)
+            For i = 0 To n - 1 : MDiag(i) = Mr(i, i) : Next
+        End If
+        Dim MTimes = Function(A As Matrix(Of Double)) If(SparseModalMass, SparseMassTimes(A), Mm * A)
         Dim massDof As Integer = 0
-        For i = 0 To n - 1 : If Mr(i, i) > 0 Then massDof += 1
+        For i = 0 To n - 1 : If MDiag(i) > 0 Then massDof += 1
         Next
         nModes = Math.Min(nModes, massDof)
         Dim p As Integer = Math.Min(massDof, Math.Min(2 * nModes, nModes + 8))
@@ -192,19 +245,19 @@ Partial Public Class FemStatic
         Dim X = Matrix(Of Double).Build.Dense(n, p)
         Dim Ratio As New List(Of KeyValuePair(Of Integer, Double))
         For i = 0 To n - 1
-            If Mr(i, i) > 0 Then Ratio.Add(New KeyValuePair(Of Integer, Double)(i, Mr(i, i) / KDiag(i)))
+            If MDiag(i) > 0 Then Ratio.Add(New KeyValuePair(Of Integer, Double)(i, MDiag(i) / KDiag(i)))
         Next
         Ratio.Sort(Function(a, b) b.Value.CompareTo(a.Value))
-        For i = 0 To n - 1 : X(i, 0) = Mr(i, i) : Next
+        For i = 0 To n - 1 : X(i, 0) = MDiag(i) : Next
         For k = 1 To p - 1
             If k - 1 < Ratio.Count Then X(Ratio(k - 1).Key, k) = 1.0 Else X(Math.Min(n - 1, k), k) = 1.0
         Next
         Dim Lam(p - 1) As Double, OldLam(p - 1) As Double
         Dim R As New ModalResults
         For it = 1 To 200
-            Dim Y = SolveColumns(Mm * X)                    'K^-1 M X
-            Dim Kr = Y.Transpose() * (Mm * X)               'Y' K Y = Y' M X
-            Dim Mq = Y.Transpose() * (Mm * Y)
+            Dim Y = SolveColumns(MTimes(X))                 'K^-1 M X
+            Dim Kr = Y.Transpose() * MTimes(X)              'Y' K Y = Y' M X
+            Dim Mq = Y.Transpose() * MTimes(Y)
             'symmetric reduced eigenproblem  Kr q = lam Mq q
             Dim Lm As Matrix(Of Double)
             Try
@@ -227,6 +280,7 @@ Partial Public Class FemStatic
             Next
             X = Xn
             R.Iterations = it
+            FemProfile.Hit("modal.iteration")
             Dim conv As Boolean = it > 1
             For k = 0 To nModes - 1
                 If Math.Abs(Lam(k) - OldLam(k)) > 1.0E-10 * Math.Abs(Lam(k)) Then conv = False
@@ -240,15 +294,16 @@ Partial Public Class FemStatic
             R.Omega(k) = Math.Sqrt(Math.Max(Lam(k), 0))
             R.Period(k) = 2 * Math.PI / R.Omega(k)
             Dim v = X.Column(k)
-            Dim mn As Double = v.DotProduct(Mm * v)
+            Dim mn As Double = v.DotProduct(If(SparseModalMass, SparseMassTimes(v.ToColumnMatrix()).Column(0), Mm * v))
             R.Phi.SetColumn(k, v / Math.Sqrt(mn))
         Next
         ReDim R.Gamma(nModes - 1, 2) : ReDim R.MassRatio(nModes - 1, 2) : ReDim R.TotalMass(2)
         For d = 0 To 2
             Dim rv = Vector(Of Double).Build.DenseOfArray(InfluenceVector(d))
-            R.TotalMass(d) = rv.DotProduct(Mm * rv)
+            Dim Mrv = If(SparseModalMass, SparseMassTimes(rv.ToColumnMatrix()).Column(0), Mm * rv)
+            R.TotalMass(d) = rv.DotProduct(Mrv)
             For k = 0 To nModes - 1
-                Dim g As Double = R.Phi.Column(k).DotProduct(Mm * rv)
+                Dim g As Double = R.Phi.Column(k).DotProduct(Mrv)
                 R.Gamma(k, d) = g
                 R.MassRatio(k, d) = If(R.TotalMass(d) > 0, g * g / R.TotalMass(d), 0)
             Next

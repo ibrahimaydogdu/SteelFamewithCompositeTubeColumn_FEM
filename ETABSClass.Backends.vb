@@ -295,7 +295,7 @@ Partial Public Class ETABS_Class
 
         Private Sub New(ByVal Owner As ETABS_Class, ByVal M As FemModel, ByVal T As FemSection)
             O = Owner : Model = M : Template = T
-            Fem = New FemEvaluator(M) With {.MassPDelta = Owner.FormInfo.PDelta}
+            Fem = New FemEvaluator(M) With {.MassPDelta = Owner.FormInfo.PDelta, .SparseModalMass = SettingChoice("FemModalMass", "dense", {"dense", "sparse"}) = "sparse"}
             For Each Id In Owner.SteelFrameDesignGroupIDs
                 Dim L As New List(Of Integer)
                 For Each nm In Owner.Groups(Id).GroupObjectNames
