@@ -118,6 +118,7 @@
     <Compile Include="ETABSClass.Aisc341.vb" />
     <Compile Include="ETABSClass.Cache.vb" />
     <Compile Include="ETABSClass.Boxes.vb" />
+    <Compile Include="ETABSClass.Predesign.vb" />
     <Compile Include="StructureEvaluator.vb" />
     <Compile Include="FemTool\EtabsReader.vb" />
     <Compile Include="Structures.vb" />

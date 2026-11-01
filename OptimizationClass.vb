@@ -247,6 +247,28 @@ Partial Public Class OptimizationClass
         End If
         GlobalBestCheck(Member, i)
     End Sub
+    'PCR-16a: member with a given design vector (OC predesign), evaluated like a random member
+    Public Sub SeedGenerate(ByRef Member As OptimizationStructure_.Member_, ByVal Vec() As Integer, ByRef ret As Integer)
+        Member = New OptimizationStructure_.Member_
+        Member.DesignVariables = CType(Vec.Clone(), Integer())
+        Call UBLBCheck(Member)
+        ETABSModel.Evaluate(Member, iter, ret)
+        If ret <> 0 Then : LogError("Problem occurred in :Evaluate") : Exit Sub : End If
+        GlobalBestCheck(Member, 0)
+    End Sub
+    'PCR-16c: member evaluated outside the search (OC design): only the best-so-far check
+    Public Sub AddMember(ByVal Member As OptimizationStructure_.Member_)
+        GlobalBestCheck(Member, 0)
+    End Sub
+    'PCR-16c: member around a given design vector: each variable moved by up to Fraction of its bound width (at least 1 position)
+    Public Sub NeighborGenerate(ByRef Member As OptimizationStructure_.Member_, ByVal Vec() As Integer, ByVal Fraction As Double, ByRef ret As Integer)
+        Dim X(Ub.Count - 1) As Integer
+        For j = 0 To Ub.Count - 1
+            Dim R As Integer = Math.Max(1, CInt(Math.Round(Fraction * (Ub(j) - Lb(j)))))
+            X(j) = Vec(j) + CInt(Int((2 * R + 1) * Rnd())) - R
+        Next
+        SeedGenerate(Member, X, ret)
+    End Sub
     Private Function Roulette_wheel(ByVal x() As Double) As Integer
         Dim RandomNum As Double = x.Sum * Rnd()
         Dim Select_N As Double = x(0)

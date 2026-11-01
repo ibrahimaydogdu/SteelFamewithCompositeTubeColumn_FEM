@@ -201,6 +201,8 @@ Public Module Program
             Console.WriteLine("RS cases: " & String.Join(", ", M.RSCases.Select(Function(c) c.Name & " dir " & c.Direction & " sf " & c.ScaleFactor.ToString("0.0000") & " ecc " & c.Eccentricity & " damp " & c.Damping & " " & c.Spectrum)))
             Dim fem As New FemStatic(M)
             If Environment.GetEnvironmentVariable("FEM_PDELTA") = "mass" Then fem.UseMassPDelta()
+            fem.TorsionFromStoryShear = String.Equals(Environment.GetEnvironmentVariable("FemTorsion"), "storyshear", StringComparison.OrdinalIgnoreCase)
+            Console.WriteLine("accidental torsion force: " & If(fem.TorsionFromStoryShear, "story shear differences (PCR-17)", "diaphragm inertial force"))
             Dim sw = Stopwatch.StartNew()
             Dim Md = fem.ModalSolve(M.ModalCount)
             Console.WriteLine("modal " & sw.ElapsedMilliseconds & " ms, modes " & Md.Period.Length)
@@ -247,6 +249,7 @@ Public Module Program
                     For d = 0 To 5 : EU(ni * 6 + d) = a2(d) : Next
                 Next
                 TorsionTest(M, rc, Rr, EU, Att)
+                StoryDriftTable(M, rc, Rr, EU)
                 Console.WriteLine("  displacements: max error translations " & (er(0) * 100).ToString("0.000") & "% rotations " & (er(1) * 100).ToString("0.000") & "% (of the largest ETABS value; ETABS max " & sc(0).ToString("0.0000E+00") & ")")
                 'base reaction
                 Dim nb As Integer, bl() As String = Nothing, bs() As String = Nothing, bn() As Double = Nothing, FX() As Double = Nothing, FY() As Double = Nothing, FZ() As Double = Nothing, MX() As Double = Nothing, MyP() As Double = Nothing, MZ() As Double = Nothing
@@ -280,6 +283,31 @@ Public Module Program
         Finally
             StopEtabs()
         End Try
+    End Sub
+
+    'Story drift of the RS case as the optimizer computes it (ETABSClass.F1_ConsInterStoryDrift): largest |U top - U bottom| of the
+    'columns of the story in the case direction, from the combined displacement magnitudes; ETABS against FEM per story
+    Private Sub StoryDriftTable(ByVal M As FemModel, ByVal rc As FemRSCase, ByVal Rr As RSResults, ByVal EtabsU() As Double)
+        Dim d As Integer = If(rc.Direction = 0, 0, 1)
+        Dim Et As New SortedDictionary(Of Double, Double), Fe As New SortedDictionary(Of Double, Double), Wh As New Dictionary(Of Double, String)
+        For Each el In M.Elements
+            If Math.Abs(el.Axes(0, 2)) <= 0.9 Then Continue For
+            Dim top As Integer = If(M.Nodes(el.NI).Z > M.Nodes(el.NJ).Z, el.NI, el.NJ), bot As Integer = If(top = el.NI, el.NJ, el.NI)
+            Dim z As Double = Math.Round(M.Nodes(top).Z, 3)
+            Dim e As Double = Math.Abs(EtabsU(top * 6 + d) - EtabsU(bot * 6 + d)), f As Double = Math.Abs(Rr.U(top * 6 + d) - Rr.U(bot * 6 + d))
+            If Not Et.ContainsKey(z) Then Et(z) = 0 : Fe(z) = 0
+            If e > Et(z) Then Et(z) = e : Wh(z) = el.Name
+            Fe(z) = Math.Max(Fe(z), f)
+        Next
+        Console.WriteLine("  story drift (case direction), ETABS / FEM / FEM-ETABS %  [column with the largest ETABS drift]:")
+        Dim worst As Double = 0, wz As Double = 0
+        For Each z In Et.Keys
+            Dim r As Double = If(Et(z) > 0, (Fe(z) / Et(z) - 1) * 100, 0)
+            If Math.Abs(r) > Math.Abs(worst) Then worst = r : wz = z
+            Console.WriteLine("    z " & z.ToString("0.00").PadLeft(8) & Et(z).ToString("0.000000").PadLeft(12) & Fe(z).ToString("0.000000").PadLeft(12) & r.ToString("0.00").PadLeft(9) & "  [" & Wh(z) & "]")
+        Next
+        Dim emax As Double = Et.Values.Max(), fmax As Double = Fe.Values.Max()
+        Console.WriteLine("  story drift: largest ETABS " & emax.ToString("0.000000") & ", largest FEM " & fmax.ToString("0.000000") & " (" & ((fmax / emax - 1) * 100).ToString("0.00") & "%); worst story z " & wz.ToString("0.00") & " " & worst.ToString("0.00") & "%")
     End Sub
 
     'Hypothesis test of the accidental eccentricity of the RS cases: static torsion with M_k = F_k x ecc x L_k (F_k: CQC diaphragm force),
@@ -1175,6 +1203,11 @@ Public Module Program
                 WorstAll = Math.Max(WorstAll, Math.Max(eT, eR))
             Next
             If Rea.ContainsKey("Dead") Then Console.WriteLine("self weight check (case Dead): ETABS total Fz " & Rea("Dead").Where(Function(v, i) (i Mod 6) = 2).Sum().ToString("0.00") & " kN")
+            'V1 hand check: total base reactions of every compared case (ETABS)
+            For Each kv In Rea
+                Console.WriteLine("total base reaction (ETABS) " & kv.Key & ": FX " & kv.Value.Where(Function(v, i) (i Mod 6) = 0).Sum().ToString("0.00") & " FY " &
+                                  kv.Value.Where(Function(v, i) (i Mod 6) = 1).Sum().ToString("0.00") & " FZ " & kv.Value.Where(Function(v, i) (i Mod 6) = 2).Sum().ToString("0.00") & " kN")
+            Next
             Dim wFull As Double = 0, wClear As Double = 0
             For Each el In M.Elements
                 wFull += el.Section.WeightPerLength * el.Length

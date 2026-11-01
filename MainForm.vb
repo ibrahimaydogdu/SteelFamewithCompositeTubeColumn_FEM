@@ -909,10 +909,30 @@ Public Class MainForm
         OptClass.Histories = New List(Of OptimizationStructure_.History_)
         ReDim OptClass.GlobalBest.DesignVariables(OptClass.Ub.Count - 1)
         OptClass.iter = 0
+        'PCR-16a: OC predesign (analyses counted in the budget), first member of the initial memory
+        Dim Seed() As Integer = Nothing
+        If Not FormInfo.OptInfo.TestWithMath AndAlso ETABSModel.PredesignMode = "oc" Then
+            SetPhase("OC predesign")
+            Seed = ETABSModel.OcPredesign(OptClass.iter, ret)
+            If ret <> 0 Then : LogError("Error occurred in OcPredesign") : Exit Sub : End If
+            OptClass.Ub = ETABSModel.Ub          'PCR-16c: bounds narrowed around the predesign (hybrid: new arrays)
+            OptClass.Lb = ETABSModel.Lb
+        End If
+        Dim Neighborhood As Boolean = Seed IsNot Nothing AndAlso ETABSModel.OcMemoryMode <> "seed"
+        Dim OcMembers As List(Of OptimizationStructure_.Member_) = If(Seed IsNot Nothing, ETABSModel.OcMembers, Nothing)
         For i = 0 To FormInfo.OptInfo.MemorySize - 1
             SetPhase("Initial memory: design " & (i + 1) & " / " & FormInfo.OptInfo.MemorySize)
             Dim Member As New OptimizationStructure_.Member_
-            OptClass.RandomGenerate(Member, 0, ret)
+            If OcMembers IsNot Nothing AndAlso i < OcMembers.Count Then
+                Member = OcMembers(i)                'PCR-16c: OC designs, already evaluated (counted in the budget)
+                OptClass.AddMember(Member)
+            ElseIf i = 0 AndAlso Seed IsNot Nothing Then
+                OptClass.SeedGenerate(Member, Seed, ret)
+            ElseIf Neighborhood Then
+                OptClass.NeighborGenerate(Member, Seed, ETABSModel.OcNeighborFraction, ret)
+            Else
+                OptClass.RandomGenerate(Member, 0, ret)
+            End If
             If ret <> 0 Then : LogError("Error occurred in RandomGenerate") : Exit Sub : End If
             OptClass.Memory.Add(Member)
             UI(AddressOf Write_form)

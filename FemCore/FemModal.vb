@@ -48,6 +48,7 @@ Partial Public Class FemStatic
     Private ChainK() As ChainResult
     Private MassFull() As Double                                'lumped translational masses, 6 per node (only 0..2 used)
     Public SparseModalMass As Boolean                           'PCR-15: reduced mass matrix in sparse rows (default: dense, earlier versions)
+    Public TorsionFromStoryShear As Boolean                     'PCR-17: accidental torsion from the story shear differences (default: diaphragm force)
     Private MassCols()() As Integer, MassVals()() As Double     'sparse reduced mass matrix: columns and values of every row
 
     'Assemble and factorise the reduced stiffness matrix (no loads); Solve does it for the load cases and keeps the factor
@@ -397,6 +398,25 @@ Partial Public Class FemStatic
             Dim dk1 As Integer = dk
             R.DiaphragmForce(dk) = Combine(Function(k) DiaF(k)(dk1))
         Next
+        'PCR-17: force of the accidental torsion of every diaphragm = difference of the CQC story shears above and below the diaphragm
+        '(the top diaphragm: its story shear); default (False): CQC of the inertial force of the diaphragm (earlier versions)
+        R.TorsionForce = R.DiaphragmForce
+        If TorsionFromStoryShear AndAlso M.DiaphragmCount > 1 Then
+            Dim Zd(M.DiaphragmCount - 1) As Double
+            For i = 0 To M.Nodes.Count - 1
+                If M.Nodes(i).Diaphragm >= 0 Then Zd(M.Nodes(i).Diaphragm) = M.Nodes(i).Z
+            Next
+            Dim Order() As Integer = Enumerable.Range(0, M.DiaphragmCount).OrderByDescending(Function(x) Zd(x)).ToArray()
+            Dim Shear(M.DiaphragmCount - 1) As Double
+            For j = 0 To Order.Length - 1
+                Dim j1 As Integer = j
+                Shear(j) = Combine(Function(k) Enumerable.Range(0, j1 + 1).Sum(Function(t) DiaF(k)(Order(t))))
+            Next
+            R.TorsionForce = New Double(M.DiaphragmCount - 1) {}
+            For j = 0 To Order.Length - 1
+                R.TorsionForce(Order(j)) = Math.Max(0, Shear(j) - If(j > 0, Shear(j - 1), 0))
+            Next
+        End If
         R.ModalFace = Fn : R.Rho = rho
         R.FaceForce = New Double(ne - 1)() {}
         For ei = 0 To ne - 1
@@ -439,7 +459,7 @@ Partial Public Class FemStatic
             Dim xs = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.X)
             Dim ys = M.Nodes.Where(Function(n1) n1.Diaphragm = k AndAlso Att(M.Nodes.IndexOf(n1))).Select(Function(n1) n1.Y)
             Dim perp As Double = If(Rs.Direction = 0, ys.Max() - ys.Min(), xs.Max() - xs.Min())
-            Dim mk As Double = R.DiaphragmForce(k) * Rs.Eccentricity * perp
+            Dim mk As Double = R.TorsionForce(k) * Rs.Eccentricity * perp
             For i = 0 To ndof - 1 : dU(i) += mk * Res.U(k)(i) : dR(i) += mk * Res.Reaction(k)(i) : Next
             For e = 0 To M.Elements.Count - 1
                 For c = 0 To 11 : dF(e)(c) += mk * Res.FaceForce(k)(e)(c) : Next
@@ -458,6 +478,7 @@ Public Class RSResults
     Public Reaction() As Double
     Public BaseForce(2) As Double           'CQC of the total base forces FX, FY, FZ
     Public DiaphragmForce() As Double       'CQC of the inertial force of every diaphragm in the case direction
+    Public TorsionForce() As Double         'force of the accidental torsion of every diaphragm (PCR-17; default: DiaphragmForce)
     Public ModalFace()()() As Double        '[mode][element](12) face forces of every mode
     Public Rho(,) As Double                 'CQC correlation matrix
     Public TorsionFace()() As Double        '[element](12) signed face forces of the accidental torsion (added by absolute value)

@@ -286,6 +286,9 @@ Partial Public Class ETABS_Class
         Public Description As String
         'FEM D/C ratios are 0.4-2.4 % below the ETABS ratios on average (measured on P4): App.config FemRatioMargin multiplies them (default 1.0)
         Private ReadOnly RatioMargin As Double = ReadNumber("FemRatioMargin", 1.0)
+        'PCR-17: App.config FemDriftMargin multiplies the FEM displacements of the seismic drift cases (default 1.0). With FemTorsion = storyshear the
+        'FEM story drifts are 1.1 % (15 stories) - 1.7 % (24 stories) below ETABS in the governing lower stories (FemTool rs, 2026-10-31)
+        Private ReadOnly DriftMargin As Double = ReadNumber("FemDriftMargin", 1.0)
 
         Public ReadOnly Property Name As String Implements IStructureEvaluator.Name
             Get
@@ -295,7 +298,8 @@ Partial Public Class ETABS_Class
 
         Private Sub New(ByVal Owner As ETABS_Class, ByVal M As FemModel, ByVal T As FemSection)
             O = Owner : Model = M : Template = T
-            Fem = New FemEvaluator(M) With {.MassPDelta = Owner.FormInfo.PDelta, .SparseModalMass = SettingChoice("FemModalMass", "dense", {"dense", "sparse"}) = "sparse"}
+            Fem = New FemEvaluator(M) With {.MassPDelta = Owner.FormInfo.PDelta, .SparseModalMass = SettingChoice("FemModalMass", "dense", {"dense", "sparse"}) = "sparse",
+                                          .TorsionFromStoryShear = SettingChoice("FemTorsion", "diaphragm", {"diaphragm", "storyshear"}) = "storyshear"}
             For Each Id In Owner.SteelFrameDesignGroupIDs
                 Dim L As New List(Of Integer)
                 For Each nm In Owner.Groups(Id).GroupObjectNames
@@ -339,7 +343,9 @@ Partial Public Class ETABS_Class
                 If T Is Nothing Then T = M.Sections.FirstOrDefault(Function(s) s.A > 0)
                 If T Is Nothing Then Reason = "no I section with a material in the model" : Return Nothing
                 Dim B As New FemBackend(Owner, M, T)
-                B.Description = M.Nodes.Count & " joints, " & M.Elements.Count & " members, DAM " & If(M.Prefs.DirectAnalysis, "0.8", "off") & ", P-Delta " & If(Owner.FormInfo.PDelta, "mass", "off")
+                B.Description = M.Nodes.Count & " joints, " & M.Elements.Count & " members, DAM " & If(M.Prefs.DirectAnalysis, "0.8", "off") & ", P-Delta " & If(Owner.FormInfo.PDelta, "mass", "off") &
+                                If(B.Fem.TorsionFromStoryShear, ", accidental torsion from the story shears (PCR-17)", "") &
+                                If(B.DriftMargin <> 1.0, ", seismic drift margin " & B.DriftMargin.ToString(Globalization.CultureInfo.InvariantCulture), "")
                 Return B
             Catch ex As Exception
                 Reason = ex.Message
@@ -496,9 +502,10 @@ Partial Public Class ETABS_Class
                             If Fem.FindCombo(nm) Is Nothing AndAlso MissingCases.Add(nm) Then O.Errorlogprint("Warning: FEM evaluator: drift case / combination '" & nm & "' is not in the FEM model, skipped")
                             Continue For
                         End If
+                        Dim f As Double = If(O.SeismicDriftCases.Contains(nm), DriftMargin, 1.0)
                         For Each U In Vs
                             For Each n In Nodes
-                                Rows.Add(New DispRow With {.Point = Model.Nodes(n).Name, .CaseName = nm, .U1 = U(n * 6) * 1000, .U2 = U(n * 6 + 1) * 1000})
+                                Rows.Add(New DispRow With {.Point = Model.Nodes(n).Name, .CaseName = nm, .U1 = f * U(n * 6) * 1000, .U2 = f * U(n * 6 + 1) * 1000})
                             Next
                             Any = True
                         Next

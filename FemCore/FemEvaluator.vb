@@ -21,6 +21,10 @@ Public Class FemEvaluator
     'PCR-15: modal analysis with the sparse (lumped) reduced mass matrix instead of the dense one (same equations, faster); default from the
     'environment variable FemModalMass = sparse (FemTool), the optimizer sets it from App.config
     Public SparseModalMass As Boolean = String.Equals(Environment.GetEnvironmentVariable("FemModalMass"), "sparse", StringComparison.OrdinalIgnoreCase)
+    'PCR-17: accidental torsion of the response spectrum cases from the story shear differences (ETABS: story drifts within about 1 %) instead
+    'of the diaphragm inertial forces (default, earlier versions: story drifts up to 5-7 % above ETABS in the lower stories); environment
+    'variable FemTorsion = storyshear (FemTool), the optimizer sets it from App.config
+    Public TorsionFromStoryShear As Boolean = String.Equals(Environment.GetEnvironmentVariable("FemTorsion"), "storyshear", StringComparison.OrdinalIgnoreCase)
     Public ReadOnly Timing As New Dictionary(Of String, Stopwatch)
     Private ReadOnly GroupElements As New Dictionary(Of String, List(Of Integer))
 
@@ -127,6 +131,7 @@ Public Class FemEvaluator
             Dim S As New FemStatic(Model)
             If MassPDelta Then S.UseMassPDelta()
             S.SparseModalMass = SparseModalMass
+            S.TorsionFromStoryShear = TorsionFromStoryShear
             R.Solver = S
             R.StaticRes = S.Solve()
             If R.StaticRes.Failed Then R.Failed = True : R.Message = R.StaticRes.Message : Return R
