@@ -21,6 +21,9 @@ Imports System.Globalization
 'section of the feasible OC designs of the memory, widened by OcBoundWidth * (catalog size - 1) on both sides (no feasible OC design: the
 'bounds stay); always within the earlier bounds.
 'Steel option of a composite hybrid group: around the ETABS initial design; the transition variables stay open.
+'PCR-16d, hybrid starts (OcHybridStarts): composite (default, earlier versions) = one loop from the all-composite layout | both = a second
+'loop from the all-steel layout (every Optimize stack steel: the start of the steel run); both designs are members of the initial memory
+'(already evaluated, counted in the budget), the better one is the predesign (first member). The loops still do not choose the transition.
 Partial Public Class ETABS_Class
     Public ReadOnly PredesignMode As String = SettingChoice("Predesign", "none", {"none", "oc"})
     Private ReadOnly OcIterations As Integer = CInt(ReadNumber("OcIterations", 15))
@@ -34,6 +37,7 @@ Partial Public Class ETABS_Class
     Public ReadOnly OcMemoryMode As String = SettingChoice("OcMemory", "seed", {"seed", "neighborhood", "oc"})
     Public ReadOnly OcNeighborFraction As Double = ReadNumber("OcNeighborFraction", 0.25)
     Private ReadOnly OcVariantSteps As Integer = CInt(ReadNumber("OcVariantSteps", 4))
+    Public ReadOnly OcHybridStarts As String = SettingChoice("OcHybridStarts", "composite", {"composite", "both"})
     Private Const OC_RATIO_CAP As Double = 4.0            'design ratios with error terms (1 + errors / members) are capped
     Private Const OC_MIN_EXPONENT As Double = 0.1
 
@@ -97,15 +101,16 @@ Partial Public Class ETABS_Class
         OcStories = L.Select(Function(x) x.ToArray()).ToArray()
     End Sub
 
-    'Start vector: ETABS initial design (W); tube and box groups: lightest section of the bounds with I >= I of the W section
-    Private Function OcStart() As Integer()
+    'Start vector: ETABS initial design (W); tube and box groups: lightest section of the bounds with I >= I of the W section.
+    'Hybrid: every Optimize group composite (Composite = True) or steel (PCR-16d)
+    Private Function OcStart(Optional ByVal Composite As Boolean = True) As Integer()
         Dim Full(Ub.Length - 1) As Integer
         If Hybrid AndAlso AltVar IsNot Nothing Then
             For s = 0 To Stacks.Count - 1
-                If StackVar(s) >= 0 Then Full(StackVar(s)) = Ub(StackVar(s))         'every Optimize group of the stack composite
+                If StackVar(s) >= 0 Then Full(StackVar(s)) = If(Composite, Ub(StackVar(s)), Lb(StackVar(s)))
             Next
             For v = 0 To NG - 1
-                If TypeVar(v) >= 0 Then Full(TypeVar(v)) = 1
+                If TypeVar(v) >= 0 Then Full(TypeVar(v)) = If(Composite, 1, 0)
             Next
         End If
         Dim G() As Integer = GroupVector(Full)
@@ -236,10 +241,29 @@ Partial Public Class ETABS_Class
         If ret <> 0 OrElse Main.DesignVariables Is Nothing Then Return Nothing
         Errorlogprint("Info: OC predesign: " & Steps & " steps, " & (iter_ - IterAtStart) & " analyses, " &
                       If(Main.Penalty = 0, "feasible design, cost " & F3(Main.CostValue), "no feasible design, smallest penalty " & F3(Main.Penalty) & " (cost " & F3(Main.CostValue) & ")"))
+        'PCR-16d: second loop from the all-steel layout; the better design is the predesign, the other one the second member
+        Dim Other As OptimizationStructure_.Member_ = Nothing, HasOther As Boolean = False
+        If Hybrid AndAlso AltVar IsNot Nothing AndAlso OcHybridStarts = "both" Then
+            Dim IterSteel As Integer = iter_
+            Dim SteelOc As OptimizationStructure_.Member_ = Nothing
+            Errorlogprint("Info: OC predesign (PCR-16d): second loop from the all-steel layout")
+            OcLoop(OcStart(False), OcIterations, OcStrengthExponent, OcDriftExponent, OcReduceExponent, OcSafety, True, iter_, ret, SteelOc, Steps)
+            If ret <> 0 OrElse SteelOc.DesignVariables Is Nothing Then Return Nothing
+            Errorlogprint("Info: OC predesign (PCR-16d, all-steel start): " & Steps & " steps, " & (iter_ - IterSteel) & " analyses, " &
+                          If(SteelOc.Penalty = 0, "feasible design, cost " & F3(SteelOc.CostValue), "no feasible design, smallest penalty " & F3(SteelOc.Penalty) & " (cost " & F3(SteelOc.CostValue) & ")"))
+            Dim SteelBetter As Boolean = (SteelOc.Penalty = 0 AndAlso (Main.Penalty > 0 OrElse SteelOc.CostValue < Main.CostValue)) OrElse
+                                         (Main.Penalty > 0 AndAlso (SteelOc.Penalty < Main.Penalty OrElse (SteelOc.Penalty = Main.Penalty AndAlso SteelOc.CostValue < Main.CostValue)))
+            If SteelBetter Then Other = Main : Main = SteelOc Else Other = SteelOc
+            HasOther = String.Join(",", Other.DesignVariables) <> String.Join(",", Main.DesignVariables)
+            Errorlogprint("Info: OC predesign (PCR-16d): predesign from the " & If(SteelBetter, "all-steel", "all-composite") & " start" &
+                          If(HasOther, ", the other design is the second member of the initial memory", " (the two designs are the same)"))
+        End If
         OcMembers = Nothing
+        If HasOther AndAlso OcMemoryMode <> "oc" Then OcMembers = New List(Of OptimizationStructure_.Member_) From {Main, Other}
         If OcMemoryMode = "oc" Then
             'PCR-16c: further OC designs from the predesign with drawn parameters (seeded generator of the run)
             OcMembers = New List(Of OptimizationStructure_.Member_) From {Main}
+            If HasOther Then OcMembers.Add(Other)
             Dim Keys As New HashSet(Of String) From {String.Join(",", Main.DesignVariables)}
             Dim IterVariants As Integer = iter_, Repeats As Integer = 0
             'constraint values of the predesign (one analysis; the variants start from them)
