@@ -169,7 +169,8 @@ Partial Public Class ETABS_Class
         Ub = Ubs.ToArray() : Lb = Lbs.ToArray()
         GUb = CType(SteelUb.Clone(), Integer()) : GLb = CType(SteelLb.Clone(), Integer())
         Errorlogprint("Info: hybrid columns (" & FormInfo.TransitionMode.ToString() & "): " & Ub.Length & " design variables (" & NG & " groups, " &
-                      AltVar.Where(Function(x) x >= 0).Count() & " alternative composite sections, " & (Ub.Length - NG - AltVar.Where(Function(x) x >= 0).Count()) & " type variables)")
+                      AltVar.Where(Function(x) x >= 0).Count() & " alternative composite sections, " & (Ub.Length - NG - AltVar.Where(Function(x) x >= 0).Count()) & " type variables)" &
+                      If(HybridTypeMapping = "equivalent", "; inactive options mapped to equivalent sections (PCR-19)", ""))
     End Sub
 
     'Is group variable v composite for the design vector Full?
@@ -203,6 +204,56 @@ Partial Public Class ETABS_Class
     Private Sub EncodeHybrid(ByVal G() As Integer, ByVal Full() As Integer)
         For v = 0 To NG - 1
             If Groups(SteelFrameDesignGroupIDs(v)).IsComposite AndAlso AltVar(v) >= 0 Then Full(AltVar(v)) = G(v) Else Full(v) = G(v)
+        Next
+        SyncInactiveSections(Full)
+    End Sub
+
+    'PCR-19: HybridTypeMapping = none (default, old behavior) | equivalent. equivalent: after every decoding the inactive
+    'section variable of an Optimize group (steel option of a composite group, composite option of a steel group) is set to
+    'the lightest ductile section of the other type within its bounds with the same steel: steel area and steel moment of
+    'inertia (major axis; tube: steel shell only, without the concrete) not below those of the active section (none: the
+    'closest). A change of the type variables then moves a group to a section of equal steel instead of a stale one, in
+    'both directions alike. Independent of the method.
+    Public ReadOnly HybridTypeMapping As String = SettingChoice("HybridTypeMapping", "none", {"none", "equivalent"})
+
+    'Steel area and steel major axis I of section k of variable v (current type of the group)
+    Private Sub SteelProps(ByVal v As Integer, ByVal k As Integer, ByRef A As Double, ByRef I As Double)
+        Dim T As TubeSection_ = TubeOf(v, k)
+        If T IsNot Nothing Then A = T.SteelArea : I = T.I33 : Return
+        A = WSections(k).Area : I = WSections(k).Imajor
+    End Sub
+
+    Private Sub SyncInactiveSections(ByVal Full() As Integer)
+        If HybridTypeMapping <> "equivalent" OrElse AltVar Is Nothing OrElse GUb Is Nothing OrElse CompUb Is Nothing Then Return
+        For v = 0 To NG - 1
+            If AltVar(v) < 0 Then Continue For
+            Dim id As Integer = SteelFrameDesignGroupIDs(v)
+            Dim C As Boolean = Groups(id).IsComposite
+            Dim A0, I0 As Double
+            SteelProps(v, If(C, Full(AltVar(v)), Full(v)), A0, I0)
+            Dim Lo As Integer = If(C, SteelLb(v), CompLb(v)), Hi As Integer = If(C, SteelUb(v), CompUb(v))
+            Dim Best As Integer = -1, BestCost As Double = Double.MaxValue
+            Dim Near As Integer = -1, NearFit As Double = -1, NearCost As Double = Double.MaxValue
+            Try
+                Groups(id).IsComposite = Not C                  'other type: catalog and properties of the inactive option
+                For s = Lo To Hi
+                    If Not IsDuctile(v, s) Then Continue For
+                    Dim A, I As Double
+                    SteelProps(v, s, A, I)
+                    Dim Cost As Double = OcCost(v, s)
+                    If A >= A0 AndAlso I >= I0 Then
+                        If Cost < BestCost Then Best = s : BestCost = Cost
+                    ElseIf Best < 0 Then
+                        Dim Fit As Double = Math.Min(A / A0, I / I0)
+                        If Fit > NearFit OrElse (Fit = NearFit AndAlso Cost < NearCost) Then Near = s : NearFit = Fit : NearCost = Cost
+                    End If
+                Next
+            Finally
+                Groups(id).IsComposite = C
+            End Try
+            Dim S0 As Integer = If(Best >= 0, Best, Near)
+            If S0 < 0 Then Continue For
+            If C Then Full(v) = S0 Else Full(AltVar(v)) = S0
         Next
     End Sub
 
