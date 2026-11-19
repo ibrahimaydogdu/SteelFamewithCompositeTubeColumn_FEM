@@ -16,7 +16,14 @@ Partial Public Class ETABS_Class
     Private Const COORD_TOL As Double = 0.001 'mm
     Private Const ANGLE_TOL As Double = 0.01 'degrees (local axis angle of the columns)
     Private Const BOUND_SHIFT_MULTIPLIER As Double = 0.05   'search bounds: shift by ln(design ratio) * 0.05 * (N-1)
-    Private Const PENALTY_EXPONENT As Double = 3            'PenalizedCost = Cost (1 + Penalty)^3
+    Private Const PENALTY_EXPONENT As Double = 3            'PenalizedCost = Cost (1 + PenaltyCoefficient * Penalty)^3
+    'PCR-20: App.config PenaltyCoefficient (default 1 = previous behaviour). A larger value makes small constraint violations
+    'expensive, so cheap designs just outside the feasible region do not rank above feasible ones.
+    Private ReadOnly PENALTY_COEFFICIENT As Double = ReadNumber("PenaltyCoefficient", 1.0)
+
+    Private Function PenalizedCostOf(ByVal Cost As Double, ByVal Pen As Double) As Double
+        Return Cost * (1 + PENALTY_COEFFICIENT * Pen) ^ PENALTY_EXPONENT
+    End Function
     Private Const GAP_FAILED_RATIO As Double = 2            'beam-column ratio when the column has no usable gap
     Private Const REBAR_DIAMETER_TOL As Double = 0.5        'mm, rebar size matching
     Private Const CALIBRATION_MIN_RATIO As Double = 0.3     'composite groups used for the ETABS / internal ratio
@@ -599,6 +606,7 @@ Partial Public Class ETABS_Class
         Dim F = Function(x As Double) x.ToString("0.###", CultureInfo.InvariantCulture)
         Errorlogprint("Info: D/C ratio limits (" & If(FixedRatioLimit > 0, "DesignRatioLimit of the settings file, written to the model", "design preferences of the model") &
                       "): steel " & F(SteelRatioLimit) & If(FormInfo.CompositeColumns, ", composite column " & F(CompositeRatioLimit), "") & "; design ratios are divided by them")
+        If PENALTY_COEFFICIENT <> 1.0 Then Errorlogprint("Info: penalty coefficient (PCR-20) " & F(PENALTY_COEFFICIENT) & ": PenalizedCost = Cost (1 + " & F(PENALTY_COEFFICIENT) & " Penalty)^3")
         Return 0
     End Function
 
@@ -1605,7 +1613,8 @@ Partial Public Class ETABS_Class
                         Continue For
                     End Try
                     If dv.Length <> SteelFrameDesignGroupIDs.Count Then Continue For
-                    Cache(p(0)) = New OptimizationStructure_.Member_ With {.DesignVariables = dv, .CostValue = c, .Penalty = pen, .PenalizedCost = pc}
+                    'PCR-20: penalized cost recomputed with the current coefficient (cache files of other settings stay valid)
+                    Cache(p(0)) = New OptimizationStructure_.Member_ With {.DesignVariables = dv, .CostValue = c, .Penalty = pen, .PenalizedCost = PenalizedCostOf(c, pen)}
                     N += 1
                 Next
                 Errorlogprint("Info: result cache " & FileName & ": " & N & " entries loaded")
@@ -1639,7 +1648,7 @@ Partial Public Class ETABS_Class
         End If
         If ret <> 0 Then : Errorlogprint("Problem occurred on :Penalty") : Exit Sub : End If
         Member.CostValue = CostStProfile(Sect_Ind)
-        Member.PenalizedCost = Member.CostValue * (1 + Member.Penalty) ^ PENALTY_EXPONENT
+        Member.PenalizedCost = PenalizedCostOf(Member.CostValue, Member.Penalty)
     End Sub
 
     'Analysis of Sect_Ind. Skipped when the model was already analysed with exactly these sections (a repair step that
