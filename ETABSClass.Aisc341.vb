@@ -24,6 +24,12 @@ Partial Public Class ETABS_Class
     Friend ReadOnly CornerBeamSide As String = SettingChoice("CornerBeamSide", "full", {"full", "rbs"})
     Friend ReadOnly CornerOrthogonal As String = SettingChoice("CornerOrthogonal", "100", {"100", "30"})
     Friend ReadOnly CornerRoofExemption As Boolean = (SettingChoice("CornerRoofExemption", "false", {"false", "true"}) = "true")
+    'PCR-21: CornerJoints geometry (PCR-5g: every joint with moment beams in both planes is a corner joint of the FEM check; in a space frame
+    'this is every joint) | groups (only the joints of the corner column groups, CornerScwbGroup, as in the ETABS evaluator).
+    'FinalOwnScwb off | fem: the final check also takes the AISC 341-22 ratios that ETABS does not compute (composite G3.4a joint ratio,
+    'corner and storey checks of the corner groups) from a FEM analysis of the same design; a ratio above 1 fails the final check
+    Friend ReadOnly CornerJoints As String = SettingChoice("CornerJoints", "geometry", {"geometry", "groups"})
+    Friend ReadOnly FinalOwnScwb As Boolean = (SettingChoice("FinalOwnScwb", "off", {"off", "fem"}) = "fem")
 
     Friend ReadOnly Property Is2022 As Boolean
         Get

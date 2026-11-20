@@ -118,6 +118,7 @@ Public Class FemModel
     Public CompositeScwb As Boolean              'AISC 341-22 G3.4a (PCR-5b): composite columns (sections with Mpcc) take part in the SCWB ratios
     Public ScwbBeamCode As Boolean               'beam side of steel joints by AISC 341-22 Eq. E3-3 instead of the ETABS fit (composite joints: G3.4a always)
     Public CornerScwb As Boolean                 'AISC 341-22 E3.3 / G3.3 (PCR-5g): columns of two intersecting moment frames, both directions together
+    Public CornerColumns As HashSet(Of Integer)  'PCR-21: element indices of the corner columns (Nothing: every joint with moment beams in both planes, PCR-5g)
     Public CornerGravity As New FemCombo         'gravity part of the D1.4a overstrength combination (1.2 D + 0.5 L + 0.2 SDS D: dead and live patterns)
     Public Omega0 As Double                      'overstrength factor of the seismic force-resisting system
     'PCR-11 options of the corner check (defaults = PCR-5g)

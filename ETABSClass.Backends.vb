@@ -9,6 +9,13 @@ Partial Public Class ETABS_Class
     Private EtabsBackend As EtabsEvaluator          'always available: initial design with the auto select lists, final check
 
     Friend FemVector() As Integer           'design vector of the last FEM analysis (composite check: section of every variable)
+    Private FinalFem As FemBackend          'PCR-21: FEM evaluator kept for the final check (FinalOwnScwb = fem)
+
+    'PCR-21: largest AISC 341-22 ratio that ETABS does not compute (FemBackend.OwnScwbRatio) of a design vector; -1 when not active
+    Public Function FinalOwnScwbRatio(ByVal Vec() As Integer, ByRef Worst As String) As Double
+        If FinalFem Is Nothing OrElse Not (Is2022 AndAlso SCWBActive) Then Return -1
+        Return FinalFem.OwnScwbRatio(GroupVector(Vec), Worst)
+    End Function
 
     Public ReadOnly Property UsesFem As Boolean
         Get
@@ -19,6 +26,7 @@ Partial Public Class ETABS_Class
     'Final check of the best design found with the FEM evaluator: from now on ETABS evaluates (the analysis of the last FEM design is not valid)
     Public Sub SwitchToEtabs()
         If Not UsesFem Then Return
+        If FinalOwnScwb Then FinalFem = CType(Backend, FemBackend)        'PCR-21
         ForgetAssignedSections()        'ETABS never received the sections of the FEM designs
         Backend = EtabsBackend
         InvalidateAnalysis()
@@ -308,7 +316,41 @@ Partial Public Class ETABS_Class
                 Next
                 GroupElements(Owner.Groups(Id).GroupName) = L
             Next
+            'PCR-21: corner joints of the FEM check = joints of the corner column groups (the ETABS evaluator recognises them by name)
+            If M.CornerScwb AndAlso Owner.CornerJoints = "groups" Then
+                M.CornerColumns = New HashSet(Of Integer)
+                For Each Id In Owner.SteelFrameDesignGroupIDs
+                    If Owner.CornerScwbGroup(Owner.Groups(Id).GroupName) Then M.CornerColumns.UnionWith(GroupElements(Owner.Groups(Id).GroupName))
+                Next
+                Owner.Errorlogprint("Info: FEM corner check (PCR-21): corner joints of the corner column groups only, " & M.CornerColumns.Count & " columns")
+            End If
         End Sub
+
+        'PCR-21 (FinalOwnScwb = fem): AISC 341-22 ratios of a design that ETABS does not compute: composite column groups (G3.4a joint ratio or
+        'corner check) and corner column groups (corner and storey checks of PCR-5g). FEM analysis of the same group sections; the state of the
+        'owner (iteration, analysis flag, FEM vector) is kept. Worst: group and member of the largest ratio.
+        Public Function OwnScwbRatio(ByVal Sect_Ind() As Integer, ByRef Worst As String) As Double
+            Dim KeepFailed As Boolean = O.AnalysisFailed, KeepIter As Integer = O.Iter, KeepVec() As Integer = O.FemVector
+            Try
+                AssignSections(Sect_Ind)
+                Analyze()
+                If Current.Failed Then Worst = "FEM analysis failed" : Return Double.PositiveInfinity
+                If Not Designed Then Fem.Design(Current) : Designed = True
+                Dim R As Double = 0
+                Worst = "-"
+                For Each Id In O.SteelFrameDesignGroupIDs
+                    Dim G = O.Groups(Id)
+                    If Not ((O.CompositeActive AndAlso G.IsComposite) OrElse O.CornerScwbGroup(G.GroupName)) Then Continue For
+                    For Each e In GroupElements(G.GroupName)
+                        Dim Re As Double = Math.Max(Current.BCMajor(e), Current.BCMinor(e))
+                        If Re > R Then R = Re : Worst = G.GroupName & " " & Model.Elements(e).Name & " " & Model.Elements(e).Section.Name
+                    Next
+                Next
+                Return R
+            Finally
+                O.AnalysisFailed = KeepFailed : O.Iter = KeepIter : O.FemVector = KeepVec
+            End Try
+        End Function
 
         'Nothing (Reason): the model or the settings cannot be handled by the own solver
         Public Shared Function TryCreate(ByVal Owner As ETABS_Class, ByRef Reason As String) As FemBackend

@@ -527,6 +527,13 @@ Partial Public Class OptimizationClass
     'A design analysed in ETABS passes the final check: ETABS penalty 0 and, with composite columns, the ETABS composite column design
     Private Function FinalPasses(ByVal M As OptimizationStructure_.Member_, ByVal Composite As Boolean, ByRef VerifyRet As Integer, ByRef Why As String) As Boolean
         If M.Penalty > 0 Then Why = "ETABS penalty " & M.Penalty.ToString("G4") : Return False
+        'PCR-21: AISC 341-22 ratios that ETABS does not compute (composite G3.4a, corner groups), FEM analysis of the same design
+        Dim OwnWhere As String = Nothing
+        Dim Own As Double = ETABSModel.FinalOwnScwbRatio(M.DesignVariables, OwnWhere)
+        If Own >= 0 Then
+            LogError("Info: final check, AISC 341-22 ratio not computed by ETABS (FEM, PCR-21): " & Own.ToString("F3", Globalization.CultureInfo.InvariantCulture) & " (" & OwnWhere & ")")
+            If Own > 1 Then Why = "AISC 341-22 ratio not computed by ETABS (FEM) " & Own.ToString("F3", Globalization.CultureInfo.InvariantCulture) & " (" & OwnWhere & ")" : Return False
+        End If
         If Not Composite Then Return True
         VerifyRet = ETABSModel.VerifyCompositeWithETABS()
         If VerifyRet <> 0 Then Why = "ETABS composite column design not available" : Return False

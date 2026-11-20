@@ -101,7 +101,9 @@ Partial Public Class FemStatic
             'PCR-5g (AISC 341-22 E3.3, Commentary case (b): multi-bay planar frames intersecting at the corner columns only): a corner joint
             '(moment beams in both planes) has no joint moment ratio; the frame lines are checked per storey with the corner columns ignored
             'and the corner columns for strength with the beams of both directions yielding (StoreyAndCornerChecks)
-            Dim Corner As Boolean = M.CornerScwb AndAlso CornerPr IsNot Nothing AndAlso BeamCount(0) > 0 AndAlso BeamCount(1) > 0
+            'PCR-21: with M.CornerColumns only the joints of those columns (a space frame has moment beams in both planes at every joint)
+            Dim Corner As Boolean = M.CornerScwb AndAlso CornerPr IsNot Nothing AndAlso BeamCount(0) > 0 AndAlso BeamCount(1) > 0 AndAlso
+                                    (M.CornerColumns Is Nothing OrElse M.CornerColumns.Contains(ci))
             If M.CornerScwb AndAlso CornerPr IsNot Nothing Then
                 Joints.Add(New ScwbJoint With {.Col = ci, .Above = If(HasAbove, above, -1), .Node = top, .Corner = Corner,
                                                .BeamSum = BeamSum, .BeamCount = BeamCount, .Dir = BeamDir, .SumC = SumC,
